@@ -159,12 +159,17 @@ The original motivation for this work drew from \textit{Engineering Cybernetics}
 \item \textbf{Bug diversity:} Our synthetic bugs (parameter/return-type changes) are a subset of real-world bug types.
 \end{enumerate}
 
+\subsection{From External Tool to Internal Habit}
+An important open question is whether the model can \textit{internalize} the diagram-reading behavior to the point where it no longer requires an external tool. In our CoT experiments, the fine-tuned model learned to produce structured diagram descriptions when a diagram was provided---a form of externally-triggered reasoning. Whether it will \textit{spontaneously} enumerate dependency relationships without a visual prompt remains unverified.
+
+We hypothesize a three-stage progression, analogous to how a painter gradually internalizes the ``step back'' reflex: (1) \textbf{tool-mediated}---the model calls an external tool like \texttt{depgraph} to generate a diagram and consults it before every fix; (2) \textbf{transitional}---the model occasionally calls the tool but increasingly relies on learned dependency intuitions; (3) \textbf{internalized}---the model constructs a text-based dependency model autonomously, without any external visual scaffold. Stage 1 is immediately deployable and guarantees accuracy; Stage 3 is the long-term goal. Whether tool use at Stage 1 accelerates or delays progression to Stage 3 is itself an empirical question we leave for future work.
+
 % ============================================================
 \section{Conclusion}
 
 This paper demonstrates that a simple, low-cost intervention---a color-coded dependency graph with a minimal text key---substantially improves LLM performance on cross-module bug-fixing tasks, raising file coverage from 0\% to 100\% in our hardest evaluation setting. Chain-of-Thought fine-tuning on diagram descriptions reverses negative diagram effects (+9 net improvement) and transfers structured-analysis habits to text-only settings. We release \texttt{depgraph}, an open-source multi-language CLI tool that auto-generates dependency graphs and prompt-ready context snippets, enabling immediate adoption in any AI-assisted programming workflow.
 
-Future work includes scaling to very-large codebases (via hierarchical graph decomposition), extending training data to non-Python languages, and testing on larger vision-language models (72B+) to eliminate the OCR bottleneck. A further direction, implied by the CoT findings, is closing the loop: once a model internalizes the ``read diagram $\rightarrow$ describe topology $\rightarrow$ reason'' pipeline, the external diagram becomes a scaffold that can eventually be dropped---the model simulates a visual canvas through structured text. This would realize the original metaphor of a painter who no longer needs to physically step back, because the whole composition is held in working memory.
+Future work includes: (1) scaling to very-large codebases via hierarchical graph decomposition; (2) extending training data to non-Python languages; (3) testing on larger vision-language models (72B+) to eliminate the OCR bottleneck; and (4) empirically testing the tool-mediated $\rightarrow$ internalized progression---specifically, whether training on tool-generated diagrams accelerates or retards the development of spontaneous dependency awareness. The CoT findings suggest that structured diagram description is a learnable behavior; whether it can be triggered internally without external stimuli is the critical next step toward a model that truly ``steps back and looks at the canvas'' on its own.
 
 % ============================================================
 \section*{Tool Availability}
