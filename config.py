@@ -6,9 +6,9 @@ import os
 
 
 # ── MiMo v2.5 (token-plan, built into opencode) ──────────────
-API_KEY = os.environ.get("EXPERIMENT_API_KEY", "sk-sr7f1INE4Rg2LFWv7oZ7MHyoTlZ7CM2qWjBjppavxhtBbEKe98SaJmU8ky6SVvez")
-API_BASE = os.environ.get("EXPERIMENT_API_BASE", "https://opencode.ai/zen/v1")
-MODEL_NAME = os.environ.get("EXPERIMENT_MODEL", "mimo-v2.5-free")
+API_KEY = os.environ.get("EXPERIMENT_API_KEY", "your-key-here")
+API_BASE = os.environ.get("EXPERIMENT_API_BASE", "https://api.example.com/v1")
+MODEL_NAME = os.environ.get("EXPERIMENT_MODEL", "model-name")
 
 # ── Alternative providers ──────────────────────────────────
 # Uncomment and set your own key:
