@@ -37,7 +37,7 @@ def _imports_py(fp: Path) -> list[str]:
                 imports.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                imports.append(node.module.split(".")[0])
+                imports.append(node.module)
     return imports
 
 def _imports_js(fp: Path) -> list[str]:
