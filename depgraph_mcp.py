@@ -120,43 +120,101 @@ def _function_analysis(project: str, function: str) -> tuple[str, str]:
 
 
 def _intra_file_analysis(file_path: str, function: str = None) -> str:
-    """Analyze function calls within a single file."""
-    import ast
+    """Analyze function calls within a single file. Supports Python, JS/TS, C#, and others."""
     try:
-        tree = ast.parse(Path(file_path).read_text(encoding="utf-8"))
+        text = Path(file_path).read_text(encoding="utf-8")
     except Exception:
-        return f"Error: cannot parse {file_path}"
+        try:
+            text = Path(file_path).read_text(encoding="gbk")
+        except Exception:
+            return f"Error: cannot read {file_path}"
+
+    ext = Path(file_path).suffix.lower()
+
+    # Python: use AST
+    if ext in (".py",):
+        return _intra_python(text, function)
+    # JS/TS/C#/Java: use regex
+    else:
+        return _intra_regex(text, function, ext)
+
+
+def _intra_python(text: str, function: str = None) -> str:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return "Error: cannot parse Python file."
 
     funcs = {}
-    calls = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            funcs[node.name] = node.lineno
             call_list = []
             for child in ast.walk(node):
                 if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
                     call_list.append(child.func.id)
-            calls[node.name] = call_list
+            funcs[node.name] = {"lineno": node.lineno, "calls": call_list}
 
+    return _format_intra_result(funcs, function, "Python")
+
+
+def _intra_regex(text: str, function: str = None, ext: str = "") -> str:
+    """Generic function detection via regex for non-Python files."""
+    # Match function/method definitions: function name(), def name(), void name(), etc.
+    patterns = [
+        r"(?:function|def|void|async|public|private|static)\s+(\w+)\s*\(",
+        r"(\w+)\s*=\s*(?:function|async)\s*\(",
+        r"(\w+)\s*:\s*function\s*\(",
+    ]
+    funcs = {}
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            name = m.group(1)
+            if name not in ("if", "for", "while", "switch", "catch", "return"):
+                if name not in funcs:
+                    funcs[name] = {"lineno": text[:m.start()].count("\n") + 1, "calls": []}
+
+    # Match function calls
+    call_pat = re.compile(r"(\w+)\s*\(")
+    for name, info in funcs.items():
+        # Find calls within a ~500 char window after the function definition
+        start = text.find(name, 0)
+        if start >= 0:
+            window = text[start:start + 2000]
+            calls = []
+            for cm in call_pat.finditer(window):
+                cn = cm.group(1)
+                if cn not in ("if", "for", "while", "switch", "catch", "return", "typeof", "console", name):
+                    if cn not in calls:
+                        calls.append(cn)
+            funcs[name]["calls"] = calls
+
+    lang = ext.upper() if ext else "Unknown"
+    return _format_intra_result(funcs, function, lang)
+
+
+def _format_intra_result(funcs: dict, function: str = None, lang: str = "") -> str:
     lines = []
-    lines.append(f"=== Intra-File Analysis: {file_path} ===\n")
+    lines.append(f"=== Intra-File Analysis ({lang}) ===\n")
     lines.append(f"Functions defined: {len(funcs)}")
-    for name, lineno in sorted(funcs.items(), key=lambda x: x[1]):
-        lines.append(f"  line {lineno}: {name}()")
+    sorted_funcs = sorted(funcs.items(), key=lambda x: x[1]["lineno"])
+    for name, info in sorted_funcs:
+        lines.append(f"  line {info['lineno']}: {name}()  calls: {info['calls'][:5]}")
+        if len(info["calls"]) > 5:
+            lines.append(f"    ... +{len(info['calls'])-5} more")
 
     if function:
         lines.append(f"\nCallers of {function}():")
-        callers = [name for name, c in calls.items() if function in c]
+        callers = [name for name, info in funcs.items() if function in info.get("calls", [])]
         if callers:
-            for c in sorted(callers, key=lambda x: funcs.get(x, 0)):
-                lines.append(f"  line {funcs.get(c, '?')}: {c}()")
+            for c in sorted(callers, key=lambda x: funcs[x]["lineno"]):
+                lines.append(f"  line {funcs[c]['lineno']}: {c}()")
         else:
-            lines.append("  No direct callers found.")
+            lines.append("  No direct callers found in this file.")
     else:
         lines.append(f"\nTop 10 most-called functions:")
         call_counts = {}
-        for fn, clist in calls.items():
-            for c in clist:
+        for fn, info in funcs.items():
+            for c in info["calls"]:
                 call_counts[c] = call_counts.get(c, 0) + 1
         top = sorted(call_counts.items(), key=lambda x: -x[1])[:10]
         for fn, count in top:
@@ -209,6 +267,13 @@ def handle_request(req: dict) -> dict:
         module = args.get("module")
         function = args.get("function")
         intra = args.get("intra")
+        # MCP clients may pass strings as arrays of single elements
+        if isinstance(module, list):
+            module = module[0] if module else None
+        if isinstance(function, list):
+            function = function[0] if function else None
+        if isinstance(intra, list):
+            intra = intra[0] if intra else None
         result_text, img_b64 = generate_graph(project, module, function, intra)
         content = [{"type": "text", "text": result_text}]
         if img_b64:
