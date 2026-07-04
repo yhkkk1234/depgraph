@@ -98,7 +98,9 @@ def handle_request(req: dict) -> dict:
 
     if method == "tools/call":
         params = req.get("params", {})
-        args = json.loads(params.get("arguments", "{}"))
+        args = params.get("arguments", {})
+        if isinstance(args, str):
+            args = json.loads(args)
         project = args.get("project", ".")
         module = args.get("module")
         result_text = generate_graph(project, module)
