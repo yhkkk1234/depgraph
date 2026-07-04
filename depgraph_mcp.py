@@ -35,14 +35,16 @@ def generate_graph(project: str, module: str = None, function: str = None, intra
 
     # ── Intra-file analysis ──
     if intra:
-        return _intra_file_analysis(intra, function), None
+        t, _ = _intra_file_analysis(intra, function)
+        return t, None
 
     if not os.path.isdir(project):
         return f"Error: project path '{project}' not found.", None
 
     # ── Function-level call analysis ──
     if function:
-        return _function_analysis(project, function), None
+        t, _ = _function_analysis(project, function)
+        return t, None
 
     # ── Module-level dependency analysis ──
     graph = scan_project(project)
