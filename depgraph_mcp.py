@@ -21,10 +21,10 @@ from scan_deps import scan_project
 from render_diagram import render_dependency_graph
 
 
-def generate_graph(project: str, module: str = None) -> str:
-    """Generate dependency graph + text key for a project/module."""
+def generate_graph(project: str, module: str = None) -> tuple[str, str]:
+    """Generate text key + base64 PNG diagram. Returns (text_report, image_b64_or_none)."""
     if not os.path.isdir(project):
-        return f"Error: project path '{project}' not found."
+        return f"Error: project path '{project}' not found.", None
 
     graph = scan_project(project)
     modules = graph.get("modules", {})
@@ -38,7 +38,7 @@ def generate_graph(project: str, module: str = None) -> str:
         if similar:
             module = similar[0]
         else:
-            return f"Error: module '{module}' not found. Available: {', '.join(sorted(modules.keys())[:10])}..."
+            return f"Error: module '{module}' not found. Available: {', '.join(sorted(modules.keys())[:10])}...", None
 
     info = modules[module]
     deps = info.get("dependencies", [])
@@ -58,9 +58,17 @@ def generate_graph(project: str, module: str = None) -> str:
     if not rdeps and not deps:
         lines.append("No dependencies found.")
     lines.append(f"")
-    lines.append(f"Summary: changing {module} affects {len(rdeps)} dependents.")
+    lines.append(f"Summary: changing {module} affects {len(rdeps)} dependent modules.")
+    text = "\n".join(lines)
 
-    return "\n".join(lines)
+    # Generate diagram image for multi-modal models
+    img_b64 = None
+    try:
+        img_b64 = render_dependency_graph(graph, highlight_module=module)
+    except Exception:
+        pass
+
+    return text, img_b64
 
 
 # ── MCP stdio protocol (minimal JSON-RPC) ──
@@ -103,10 +111,13 @@ def handle_request(req: dict) -> dict:
             args = json.loads(args)
         project = args.get("project", ".")
         module = args.get("module")
-        result_text = generate_graph(project, module)
+        result_text, img_b64 = generate_graph(project, module)
+        content = [{"type": "text", "text": result_text}]
+        if img_b64:
+            content.append({"type": "image", "data": img_b64, "mimeType": "image/png"})
         return {
             "jsonrpc": "2.0", "id": req_id,
-            "result": {"content": [{"type": "text", "text": result_text}]},
+            "result": {"content": content},
         }
 
     return {"jsonrpc": "2.0", "id": req_id, "result": {}}
