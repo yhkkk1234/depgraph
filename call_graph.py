@@ -5,6 +5,7 @@ for generating cross-module bug training data.
 """
 import ast
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -17,6 +18,21 @@ def _get_module(file_path: Path, project_root: Path) -> str:
     else:
         parts[-1] = parts[-1].replace(".py", "")
     return ".".join(parts)
+
+
+def _collect_direct_calls(node) -> list[str]:
+    """Recursively collect function calls from node, skipping nested function bodies."""
+    calls = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue  # Skip nested function bodies
+        if isinstance(child, ast.Call):
+            if isinstance(child.func, ast.Name):
+                calls.append(child.func.id)
+            elif isinstance(child.func, ast.Attribute):
+                calls.append(child.func.attr)
+        calls.extend(_collect_direct_calls(child))
+    return calls
 
 
 def _extract_defs_and_calls(file_path: Path) -> tuple[list[str], list[str]]:
@@ -133,6 +149,7 @@ def analyze_call_graph(project_path: str) -> dict:
 
     return {
         "functions": {k: v for k, v in functions.items() if k in callers},
+        "callers": {k: sorted(v) for k, v in callers.items()},
         "high_impact": high_impact,
         "total_functions": len(functions),
         "total_high_impact": len(high_impact),

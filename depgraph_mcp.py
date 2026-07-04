@@ -51,6 +51,8 @@ def generate_graph(project: str, module: str = None, function: str = None, intra
     modules = graph.get("modules", {})
 
     if not module:
+        if not modules:
+            return "Error: no modules found in project.", None
         best = max(modules.items(), key=lambda x: len(x[1].get("dependents", [])))
         module = best[0]
 
@@ -173,8 +175,7 @@ def _intra_regex(text: str, function: str = None, ext: str = "") -> str:
         r"(?:function|def|void|async|public|private|static|protected)\s+(\w+)\s*\(",
         r"(\w+)\s*=\s*(?:function|async)\s*\(",
         r"(\w+)\s*:\s*function\s*\(",
-        r"(\w+)\s*=\s*\([^)]*\)\s*=>",
-        r"const\s+(\w+)\s*=",
+        r"(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>",
     ]
     funcs = {}
     for pat in patterns:
@@ -188,7 +189,8 @@ def _intra_regex(text: str, function: str = None, ext: str = "") -> str:
     for name, info in funcs.items():
         # Find opening brace after function definition
         brace_start = text.find("{", info["start"])
-        if brace_start < 0:
+        if brace_start < 0 or brace_start > info["start"] + 200:
+            # No body found (e.g. arrow function without braces) — skip
             continue
         # Find matching closing brace
         brace_end = _find_matching_brace(text, brace_start)
@@ -229,7 +231,6 @@ def _find_matching_brace(text: str, open_pos: int) -> int:
 
 def _remove_nested_funcs(body: str) -> str:
     """Remove content inside nested function bodies from the text."""
-    # Match nested function/arrow definitions and remove their bodies
     result = body
     nested_pats = [
         r"(?:function|async\s+function)\s*\w*\s*\(.*?\)\s*\{",
@@ -237,7 +238,9 @@ def _remove_nested_funcs(body: str) -> str:
         r"\w+\s*=\s*\([^)]*\)\s*=>\s*\{",
     ]
     for pat in nested_pats:
-        for m in re.finditer(pat, result):
+        # Collect all matches first, then replace from end to start to preserve positions
+        matches = list(re.finditer(pat, result))
+        for m in reversed(matches):
             brace = result.find("{", m.start())
             if brace >= 0:
                 end = _find_matching_brace(result, brace)
@@ -352,13 +355,21 @@ def main():
     for line in sys.stdin:
         try:
             req = json.loads(line.strip())
+            # Use --project-dir as default if not specified in request
+            if "params" in req:
+                req_args = req["params"].get("arguments", {})
+                if isinstance(req_args, str):
+                    req_args = json.loads(req_args)
+                if isinstance(req_args, dict) and not req_args.get("project"):
+                    req_args["project"] = default_project
+                    req["params"]["arguments"] = req_args
             resp = handle_request(req)
             sys.stdout.write(json.dumps(resp) + "\n")
             sys.stdout.flush()
         except json.JSONDecodeError:
             continue
         except Exception as e:
-            err_resp = {"jsonrpc": "2.0", "id": req.get("id") if 'req' in dir() else None,
+            err_resp = {"jsonrpc": "2.0", "id": req.get("id") if 'req' in locals() else None,
                        "error": {"code": -32603, "message": str(e)}}
             sys.stdout.write(json.dumps(err_resp) + "\n")
             sys.stdout.flush()

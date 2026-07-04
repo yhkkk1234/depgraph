@@ -50,7 +50,7 @@ def _imports_py(fp: Path) -> list[str]:
                 imports.append(node.module)
     return imports
 
-def _imports_js(fp: Path) -> list[str]:
+def _imports_js(fp: Path, root: Path = None) -> list[str]:
     """Extract local imports from JS/TS files."""
     imports = []
     try:
@@ -62,8 +62,10 @@ def _imports_js(fp: Path) -> list[str]:
         path = m.group(1)
         # Resolve relative to absolute
         resolved = (fp.parent / path).resolve()
+        # Use project root if provided, otherwise fall back to parent^3
+        base = root if root else fp.parent.parent.parent
         try:
-            imports.append(_module_path(resolved, fp.parent.parent.parent))
+            imports.append(_module_path(resolved, base))
         except (ValueError, OSError):
             pass
     return imports
@@ -145,13 +147,23 @@ def scan_project(project_root: str) -> dict:
         if not cfg:
             continue
         mod_name = file_to_module[fpath]
-        file_imports = cfg["extractor"](fpath)
+        extractor = cfg["extractor"]
+        # Pass root to extractors that need it
+        try:
+            file_imports = extractor(fpath, root) if extractor.__name__ == "_imports_js" else extractor(fpath)
+        except TypeError:
+            file_imports = extractor(fpath)
 
         internal_deps = []
         for imp in file_imports:
             best = None
             for other_name in all_module_names:
-                if imp == other_name or imp.startswith(other_name.replace("\\", "/") + "/") or imp.startswith(other_name.split("/")[-1]):
+                imp_norm = imp.replace("\\", "/")
+                other_norm = other_name.replace("\\", "/")
+                # Exact match, or imp is a child path of other_name, or filename matches exactly
+                if (imp_norm == other_norm or 
+                    imp_norm.startswith(other_norm + "/") or
+                    imp_norm.split("/")[-1] == other_norm.split("/")[-1]):
                     if best is None or len(other_name) > len(best):
                         best = other_name
             if best and best != mod_name:
