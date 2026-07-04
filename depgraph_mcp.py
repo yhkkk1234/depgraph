@@ -84,7 +84,7 @@ def handle_request(req: dict) -> dict:
             "jsonrpc": "2.0", "id": req_id,
             "result": {"tools": [{
                 "name": "depgraph",
-                "description": "Generate a module dependency graph for a project. Returns which files depend on a given module, showing the full impact surface of any code change. Use this when debugging cross-module bugs to identify ALL affected files.",
+                "description": "REQUIRED first step for any cross-module bug fix: scan the project to identify which files depend on the changed module. Returns a complete dependency list showing the full impact surface. MUST be called before proposing any code changes — never skip this tool when debugging interface changes, signature modifications, or module refactoring.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
