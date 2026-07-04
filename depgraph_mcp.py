@@ -154,18 +154,27 @@ def _intra_python(text: str, function: str = None) -> str:
             for child in ast.walk(node):
                 if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
                     call_list.append(child.func.id)
-            funcs[node.name] = {"lineno": node.lineno, "calls": call_list}
+            # Remove calls from nested function bodies (keep only direct calls)
+            direct_set = set(call_list)
+            for child in ast.walk(node):
+                if child is not node and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for grandchild in ast.walk(child):
+                        if isinstance(grandchild, ast.Call) and isinstance(grandchild.func, ast.Name):
+                            direct_set.discard(grandchild.func.id)
+            funcs[node.name] = {"lineno": node.lineno, "calls": sorted(direct_set)}
 
     return _format_intra_result(funcs, function, "Python")
 
 
 def _intra_regex(text: str, function: str = None, ext: str = "") -> str:
     """Generic function detection via regex for non-Python files."""
-    # Match function/method definitions: function name(), def name(), void name(), etc.
+    # Match function/method definitions
     patterns = [
-        r"(?:function|def|void|async|public|private|static)\s+(\w+)\s*\(",
+        r"(?:function|def|void|async|public|private|static|protected)\s+(\w+)\s*\(",
         r"(\w+)\s*=\s*(?:function|async)\s*\(",
         r"(\w+)\s*:\s*function\s*\(",
+        r"(\w+)\s*=\s*\([^)]*\)\s*=>",
+        r"const\s+(\w+)\s*=",
     ]
     funcs = {}
     for pat in patterns:
@@ -173,25 +182,69 @@ def _intra_regex(text: str, function: str = None, ext: str = "") -> str:
             name = m.group(1)
             if name not in ("if", "for", "while", "switch", "catch", "return"):
                 if name not in funcs:
-                    funcs[name] = {"lineno": text[:m.start()].count("\n") + 1, "calls": []}
+                    funcs[name] = {"lineno": text[:m.start()].count("\n") + 1, "start": m.start(), "calls": []}
 
-    # Match function calls
-    call_pat = re.compile(r"(\w+)\s*\(")
+    # For each function, find its body using brace matching, then extract direct calls
     for name, info in funcs.items():
-        # Find calls within a ~500 char window after the function definition
-        start = text.find(name, 0)
-        if start >= 0:
-            window = text[start:start + 2000]
-            calls = []
-            for cm in call_pat.finditer(window):
-                cn = cm.group(1)
-                if cn not in ("if", "for", "while", "switch", "catch", "return", "typeof", "console", name):
-                    if cn not in calls:
-                        calls.append(cn)
-            funcs[name]["calls"] = calls
+        # Find opening brace after function definition
+        brace_start = text.find("{", info["start"])
+        if brace_start < 0:
+            continue
+        # Find matching closing brace
+        brace_end = _find_matching_brace(text, brace_start)
+        if brace_end < 0:
+            brace_end = info["start"] + 3000  # fallback
+
+        body = text[brace_start:brace_end]
+        # Remove content of nested function definitions before counting calls
+        body_clean = _remove_nested_funcs(body)
+        # Extract calls from cleaned body
+        calls = []
+        for cm in re.finditer(r"\b(\w+)\s*\(", body_clean):
+            cn = cm.group(1)
+            if cn not in ("if", "for", "while", "switch", "catch", "return", "typeof", "console",
+                          "new", "throw", "void", "delete", "import", "export", "require",
+                          "setTimeout", "setInterval", "clearTimeout", "clearInterval") \
+               and not cn[0].isupper():  # Skip class/constructor calls
+                if cn not in calls and cn != name:
+                    calls.append(cn)
+        funcs[name]["calls"] = calls
 
     lang = ext.upper() if ext else "Unknown"
     return _format_intra_result(funcs, function, lang)
+
+
+def _find_matching_brace(text: str, open_pos: int) -> int:
+    """Find the position of the closing brace matching the opening brace at open_pos."""
+    depth = 0
+    for i in range(open_pos, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _remove_nested_funcs(body: str) -> str:
+    """Remove content inside nested function bodies from the text."""
+    # Match nested function/arrow definitions and remove their bodies
+    result = body
+    nested_pats = [
+        r"(?:function|async\s+function)\s*\w*\s*\(.*?\)\s*\{",
+        r"\([^)]*\)\s*=>\s*\{",
+        r"\w+\s*=\s*\([^)]*\)\s*=>\s*\{",
+    ]
+    for pat in nested_pats:
+        for m in re.finditer(pat, result):
+            brace = result.find("{", m.start())
+            if brace >= 0:
+                end = _find_matching_brace(result, brace)
+                if end >= 0:
+                    # Replace nested body with whitespace (preserve position offsets)
+                    result = result[:brace+1] + " " * (end - brace - 1) + result[end:]
+    return result
 
 
 def _format_intra_result(funcs: dict, function: str = None, lang: str = "") -> str:
