@@ -160,10 +160,9 @@ def scan_project(project_root: str) -> dict:
             for other_name in all_module_names:
                 imp_norm = imp.replace("\\", "/")
                 other_norm = other_name.replace("\\", "/")
-                # Exact match, or imp is a child path of other_name, or filename matches exactly
+                # Exact match, or imp is a child path of other_name
                 if (imp_norm == other_norm or 
-                    imp_norm.startswith(other_norm + "/") or
-                    imp_norm.split("/")[-1] == other_norm.split("/")[-1]):
+                    imp_norm.startswith(other_norm + "/")):
                     if best is None or len(other_name) > len(best):
                         best = other_name
             if best and best != mod_name:

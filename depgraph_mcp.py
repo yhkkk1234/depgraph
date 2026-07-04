@@ -143,6 +143,20 @@ def _intra_file_analysis(file_path: str, function: str = None) -> str:
         return _intra_regex(text, function, ext)
 
 
+def _collect_direct(node: ast.AST) -> list[str]:
+    """Recursively collect Call nodes, skipping nested function bodies."""
+    calls = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+            calls.append(child.func.id)
+        elif isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
+            calls.append(child.func.attr)
+        calls.extend(_collect_direct(child))
+    return sorted(set(calls))
+
+
 def _intra_python(text: str, function: str = None) -> str:
     try:
         tree = ast.parse(text)
@@ -152,18 +166,7 @@ def _intra_python(text: str, function: str = None) -> str:
     funcs = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            call_list = []
-            for child in ast.walk(node):
-                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-                    call_list.append(child.func.id)
-            # Remove calls from nested function bodies (keep only direct calls)
-            direct_set = set(call_list)
-            for child in ast.walk(node):
-                if child is not node and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for grandchild in ast.walk(child):
-                        if isinstance(grandchild, ast.Call) and isinstance(grandchild.func, ast.Name):
-                            direct_set.discard(grandchild.func.id)
-            funcs[node.name] = {"lineno": node.lineno, "calls": sorted(direct_set)}
+            funcs[node.name] = {"lineno": node.lineno, "calls": _collect_direct(node)}
 
     return _format_intra_result(funcs, function, "Python")
 
