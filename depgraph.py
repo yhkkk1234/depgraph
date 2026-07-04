@@ -20,23 +20,37 @@ sys.path.insert(0, SCRIPT_DIR)
 from scan_deps import scan_project, graph_to_mermaid
 from render_diagram import render_dependency_graph
 from legend_gen import generate_full_legend
+from doc_scanner import scan_document
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate dependency graph + text key for AI code analysis")
-    parser.add_argument("project", help="Path to Python project directory")
-    parser.add_argument("--highlight", "-H", help="Module to highlight as changed (e.g. models.task)")
+    parser.add_argument("project", help="Path to Python project directory or document file")
+    parser.add_argument("--highlight", "-H", help="Module/section to highlight as changed")
     parser.add_argument("--output", "-o", default=".", help="Output directory (default: current dir)")
     parser.add_argument("--inject", "-i", action="store_true", help="Output prompt-ready snippet to stdout")
+    parser.add_argument("--doc", "-d", action="store_true", help="Scan a document (Markdown/LaTeX) instead of code")
     args = parser.parse_args()
 
-    proj = Path(args.project).resolve()
-    if not proj.is_dir():
-        print(f"Error: {args.project} is not a directory", file=sys.stderr)
-        sys.exit(1)
+    target = Path(args.project).resolve()
 
-    print(f"Scanning {proj}...", file=sys.stderr)
-    graph = scan_project(str(proj))
+    if args.doc:
+        # Document mode
+        if not target.is_file():
+            print(f"Error: --doc requires a file path, got a directory", file=sys.stderr)
+            sys.exit(1)
+        print(f"Scanning document {target}...", file=sys.stderr)
+        graph = scan_document(str(target))
+        if "error" in graph:
+            print(f"Error: {graph['error']}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Code mode
+        if not target.is_dir():
+            print(f"Error: {args.project} is not a directory (use --doc for files)", file=sys.stderr)
+            sys.exit(1)
+        print(f"Scanning {target}...", file=sys.stderr)
+        graph = scan_project(str(target))
     modules = graph.get("modules", {})
     print(f"  Found {len(modules)} modules", file=sys.stderr)
 
