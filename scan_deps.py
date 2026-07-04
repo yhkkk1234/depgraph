@@ -7,6 +7,16 @@ from pathlib import Path
 from collections import defaultdict
 
 
+def _safe_read(fp: Path) -> str:
+    """Read file with encoding fallback (UTF-8 -> GBK -> Latin-1)."""
+    for enc in ("utf-8", "gbk", "latin-1"):
+        try:
+            return fp.read_text(encoding=enc)
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    return ""
+
+
 # ── Module name resolution per language ──
 
 def _module_py(fp: Path, root: Path) -> str:
@@ -28,7 +38,7 @@ def _module_path(fp: Path, root: Path) -> str:
 def _imports_py(fp: Path) -> list[str]:
     imports = []
     try:
-        tree = ast.parse(fp.read_text(encoding="utf-8"))
+        tree = ast.parse(_safe_read(fp))
     except (SyntaxError, UnicodeDecodeError):
         return imports
     for node in ast.walk(tree):
@@ -44,7 +54,7 @@ def _imports_js(fp: Path) -> list[str]:
     """Extract local imports from JS/TS files."""
     imports = []
     try:
-        text = fp.read_text(encoding="utf-8")
+        text = _safe_read(fp)
     except UnicodeDecodeError:
         return imports
     # import X from './path' or require('./path')
@@ -62,7 +72,7 @@ def _imports_go(fp: Path) -> list[str]:
     """Extract internal imports from Go files."""
     imports = []
     try:
-        text = fp.read_text(encoding="utf-8")
+        text = _safe_read(fp)
     except UnicodeDecodeError:
         return imports
     module = ""
@@ -79,7 +89,7 @@ def _imports_rs(fp: Path) -> list[str]:
     """Extract internal module imports from Rust files."""
     imports = []
     try:
-        text = fp.read_text(encoding="utf-8")
+        text = _safe_read(fp)
     except UnicodeDecodeError:
         return imports
     for m in re.finditer(r"(?:mod|use)\s+(crate::)?([a-zA-Z_][\w:]*)", text):
