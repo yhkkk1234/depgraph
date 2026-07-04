@@ -12,7 +12,7 @@ Usage in opencode.json:
     }
   }
 """
-import json, os, sys, ast
+import json, os, sys, ast, re
 from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -264,16 +264,15 @@ def handle_request(req: dict) -> dict:
         if isinstance(args, str):
             args = json.loads(args)
         project = args.get("project", ".")
-        module = args.get("module")
-        function = args.get("function")
-        intra = args.get("intra")
-        # MCP clients may pass strings as arrays of single elements
-        if isinstance(module, list):
-            module = module[0] if module else None
-        if isinstance(function, list):
-            function = function[0] if function else None
-        if isinstance(intra, list):
-            intra = intra[0] if intra else None
+        # Coerce params: MCP clients may pass arrays or nested objects
+        def _as_str(v):
+            if v is None: return None
+            if isinstance(v, str): return v
+            if isinstance(v, (list, tuple)): return str(v[0]) if v else None
+            return str(v)
+        module = _as_str(args.get("module"))
+        function = _as_str(args.get("function"))
+        intra = _as_str(args.get("intra"))
         result_text, img_b64 = generate_graph(project, module, function, intra)
         content = [{"type": "text", "text": result_text}]
         if img_b64:
