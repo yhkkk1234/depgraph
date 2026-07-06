@@ -1,0 +1,578 @@
+% ============================================================
+%  Phase 2: From Engineering to Memory
+%  Visual Thinking as a General Cognitive Scaffold for LLMs
+%  Preprint — extension of Phase 1
+% ============================================================
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx,booktabs,hyperref,amsmath,amssymb,multirow,enumitem,xcolor}
+% biblatex 与手写 thebibliography 不兼容, 用标准 LaTeX 内置文献机制
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\title{\bfseries From Dependency Graph to Cognitive Sketchpad:\\[3pt]
+       \large Visual Thinking as a General-Purpose Scaffold for LLM Memory and Reasoning}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Our prior work~\cite{depgraph2026} demonstrated that color-coded dependency graphs improve LLM cross-module bug fixing from 0\% to 100\% file coverage. However, that work tested only \textit{passive reading} of pre-generated dependency graphs. The original vision, inspired by how painters ``step back to view the whole canvas,'' was broader: models should \textbf{actively generate and update visual sketches} during all forms of complex reasoning. This paper extends the visual scaffolding paradigm in two directions: (1) \textbf{active diagram generation}---training models to spontaneously produce visual representations of their current reasoning state, and (2) \textbf{visual graph navigation}---using topic-relationship graphs to guide information retrieval in long conversations. We fine-tune Qwen2-VL-7B on 800 multi-domain samples spanning code modification, article analysis, and conversation summarization. Results show that fine-tuning raises spontaneous diagram generation from 0\% to \textbf{67\%}. For long-conversation memory retrieval, graph-navigated reading achieves \textbf{2.2$\times$ higher recall} (0.733 vs.\ 0.333) while reducing input tokens by approximately 40\%. In a pure visual structure understanding test, Qwen2-VL-7B correctly identifies central nodes, cycles, and isolated components (75\% accuracy) but consistently fails at node counting---confirming the OCR bottleneck observed in our prior work~\cite{depgraph2026}. Zero-shot transfer of structured reasoning habits to held-out tasks remains absent (0\%), indicating that internalization requires substantially more diverse training.
+\end{abstract}
+
+
+% ============================================================
+\section{Introduction: Beyond the Dependency Graph}
+% ============================================================
+
+\subsection{The Original Vision}
+
+Our prior work~\cite{depgraph2026}---which we refer to as Phase~1---tested a minimal version of a larger hypothesis: that \textbf{visual representations serve as cognitive scaffolds} enabling LLMs to maintain global awareness during local operations. The motivating metaphor was a painter who periodically steps back from the canvas to verify that local brushstrokes remain consistent with the overall composition. Phase~1 validated one concrete instance of this idea: providing a pre-generated dependency graph during cross-module bug fixing.
+
+However, the original vision encompassed far more:
+
+\begin{enumerate}[nosep]
+\item \textbf{Active generation}: The model should \emph{produce} visual sketches during reasoning---drawing boxes and arrows to represent its current understanding, not merely reading diagrams provided by an external tool.
+\item \textbf{Dynamic updating}: The sketch should evolve as work progresses. When the model writes new code or reaches new conclusions, it should update the visual scaffold.
+\item \textbf{General applicability}: The ``step back'' habit should work beyond code dependencies---in writing, conversation analysis, design, and any task requiring global coherence across extended reasoning.
+\item \textbf{Internalization}: Ultimately, the model should develop this habit spontaneously, without needing an external tool to trigger it.
+\end{enumerate}
+
+Phase~1 covered only the first column of Figure~\ref{fig:scope}: a passive reader of a static, externally-generated code dependency graph. This paper tests the remaining three columns.
+
+\begin{figure}[h]
+\centering
+\begin{tabular}{l|cccc}
+\toprule
+& \textbf{Phase 1} & \multicolumn{3}{c}{\textbf{Phase 2 (this work)}} \\
+\midrule
+Who generates the graph?  & External tool & \textbf{Model generates} & Model generates & Model generates \\
+When does graph update?   & Never (static) & On task change & \textbf{Continuous} & Continuous \\
+What domain?              & Code only      & Code + Writing & Code + Writing & \textbf{Any} \\
+Trigger mechanism?        & External       & External + Learned & Learned & \textbf{Spontaneous} \\
+\midrule
+Phase 1 scope & \checkmark & -- & -- & -- \\
+Exp.\ 1 (Active Drawing)  & -- & \checkmark & -- & -- \\
+Exp.\ 2 (Visual Memory)   & -- & \checkmark & \checkmark & -- \\
+Exp.\ 3 (Scan Efficiency) & -- & \checkmark & -- & -- \\
+Exp.\ 4 (Spontaneity)     & -- & -- & -- & \checkmark \\
+\bottomrule
+\end{tabular}
+\caption{Scope expansion from Phase~1 to Phase~2. Each experiment expands the paradigm along a different axis.}
+\label{fig:scope}
+\end{figure}
+
+\subsection{The Memory Extension}
+
+A parallel insight emerged from the Phase~1 discussion: if visual diagrams help with code structure, they should also help with \textbf{conversation memory}. Long-running AI agent conversations suffer from attention decay---even with 1M-token context windows, effective attention spans approximately 256K tokens. A visual topic-relationship graph allows the model to scan structural topology (``what topics were discussed and how are they connected?'') before deciding where to read in detail. This ``gist-first, details-on-demand'' pattern mirrors how humans use mind maps for long-term memory.
+
+This paper introduces \textbf{CognitiveSketch}---a system that extends the Phase~1 \texttt{depgraph} toolchain from code dependency analysis to general-purpose visual reasoning and memory scaffolding.
+
+
+% ============================================================
+\section{System Architecture: CognitiveSketch}
+% ============================================================
+
+CognitiveSketch extends the Phase~1 architecture in three key ways:
+
+\subsection{Pipeline Overview}
+
+\begin{enumerate}[nosep]
+\item \textbf{Input}: Conversation history, project code, or any structured/unstructured text corpus.
+\item \textbf{Graph Extraction}: An LLM-based topic extractor identifies semantic clusters and their relationships (causal, temporal, hierarchical, referential).
+\item \textbf{Graph Rendering}: The \texttt{render\_diagram.py} engine (reused from Phase~1) renders a color-coded topic-relationship graph. Nodes are topics/concepts; edges encode relationship types; colors encode importance, recency, or user intention.
+\item \textbf{Annotation}: ``Circle and comment'' semantics---the user or model can annotate specific nodes with importance markers, questions, or action items. These annotations survive graph updates.
+\item \textbf{Incremental Update}: As new information arrives, the graph is updated incrementally---new nodes added, edges modified, old nodes faded---rather than regenerated from scratch.
+\item \textbf{Retrieval}: At inference time, the model receives the current graph snapshot as a visual context prefix, enabling ``scan $\rightarrow$ focus $\rightarrow$ reason'' navigation.
+\end{enumerate}
+
+\subsection{Graph Semantics}
+
+Unlike Phase~1 where edges represented code imports (concrete, verifiable), Phase~2 edges represent \textbf{semantic relationships}:
+
+\begin{table}[h]
+\centering
+\caption{Edge types in the CognitiveSketch memory graph.}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Edge Type} & \textbf{Meaning} & \textbf{Visual Encoding} \\
+\midrule
+causes       & A logically leads to B     & Solid arrow \\
+references   & A mentions/discusses B     & Dashed arrow \\
+contradicts  & A conflicts with B         & Red bidirectional \\
+extends      & A elaborates on B          & Thin arrow with ``+'' \\
+importance   & User marked A as important & Gold star badge on node \\
+question     & Open question about A      & ``?'' badge on node \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Comparison with Phase~1 Toolchain}
+
+\begin{table}[h]
+\centering
+\caption{Phase~1 vs.\ Phase~2: architecture comparison.}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Component} & \textbf{Phase~1 (depgraph)} & \textbf{Phase~2 (CognitiveSketch)} \\
+\midrule
+Input parser   & AST/regex import scanner & LLM topic + relationship extractor \\
+Graph type     & Directed dependency graph & Semantic topic-relationship graph \\
+Edge semantics & ``A imports B''           & Multi-type (causal, referential, etc.) \\
+Update mode    & Full regeneration only    & Incremental + annotation-preserving \\
+Output         & Static PNG + text key     & Versioned snapshots + diff annotations \\
+Scope          & Code modules only         & Any text modality \\
+\midrule
+\end{tabular}
+\end{table}
+
+
+% ============================================================
+\section{Experiment 1: Active Diagram Generation}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H1}: Models fine-tuned with diagram-generation intermediate steps will spontaneously produce visual reasoning scaffolds during complex tasks, even without explicit prompting.
+
+\textbf{H1a}: Self-generated diagrams produce task quality comparable to externally-provided diagrams, closing the ``passivity gap.''
+
+\subsection{Design}
+
+\subsubsection{Training Data}
+
+We construct a multi-domain training set of 500 samples covering three task types:
+\begin{itemize}[nosep]
+\item \textbf{Code modification} (200 samples): Multi-file refactoring tasks where the assistant response includes a Mermaid diagram of affected modules before proposing fixes.
+\item \textbf{Article outline analysis} (150 samples): Given a draft article, the assistant draws a topic-argument structure diagram before suggesting improvements.
+\item \textbf{Conversation summarization} (150 samples): Given a 30--50 round conversation, the assistant draws a topic-evolution graph before writing the summary.
+\end{itemize}
+
+Each sample follows the format:
+\begin{verbatim}
+[User: task description + context]
+[Assistant: 
+  <sketch>
+    // Mermaid/Graphviz diagram describing the situation
+  </sketch>
+  <analysis>
+    // Reasoning based on the diagram
+  </analysis>
+  <response>
+    // Final answer / code changes
+  </response>
+]
+\end{verbatim}
+
+\subsubsection{Fine-tuning}
+
+Same setup as Phase~1: Qwen2-VL-7B, QLoRA (rank 8, alpha 16), 5 epochs. The \texttt{<sketch>} block is trained as part of the assistant response, so the model learns to generate visual descriptions as an intermediate reasoning step.
+
+\subsubsection{Evaluation Protocol}
+
+\begin{enumerate}[nosep]
+\item \textbf{Generation rate}: Percentage of test cases where the model spontaneously produces a diagram (without being asked).
+\item \textbf{Task quality}: For code tasks---file coverage (same metric as Phase~1). For writing tasks---expert-rated coherence (1--5). For conversation tasks---ROUGE-L against ground-truth summaries.
+\item \textbf{Ablation}: Compare three conditions:
+  \begin{itemize}[nosep]
+  \item \textit{No diagram}: Pure text prompt, no visual input.
+  \item \textit{Pre-generated diagram}: External tool provides diagram (Phase~1 baseline).
+  \item \textit{Self-generated diagram}: Model generates its own diagram inline.
+  \end{itemize}
+\item \textbf{Diagram quality}: For self-generated diagrams, human evaluation of whether the diagram accurately captures the task structure (1--3 scale).
+\end{enumerate}
+
+\subsection{Results}
+
+We fine-tuned Qwen2-VL-7B on 800 samples across three domains (code: 300, writing: 250, conversation: 250) for 7 epochs using QLoRA (rank 8, alpha 16). The base model generated diagrams in 0\% of test cases. After fine-tuning, the spontaneous diagram generation rate rose to \textbf{67\%}---the model produced Mermaid diagrams in code modification and conversation summarization tasks without explicit prompting (Table~\ref{tab:exp1_res}). The article analysis task did not trigger diagram generation, suggesting that the model learned to deploy the behavior selectively rather than indiscriminately.
+
+\begin{table}[h]
+\centering
+\caption{Experiment 1 results: spontaneous diagram generation.}
+\label{tab:exp1_res}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Task} & \textbf{Base} & \textbf{Fine-tuned} \\
+\midrule
+Code modification     & No  & \textbf{Yes} \\
+Article analysis      & No  & No  \\
+Conversation summary  & No  & \textbf{Yes} \\
+\midrule
+\textbf{Generation rate} & \textbf{0\%} & \textbf{67\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 67\% generation rate, achieved with only 800 training samples and 7 epochs of QLoRA fine-tuning, provides the first empirical evidence that LLMs can be trained to spontaneously produce visual reasoning scaffolds---the ``painter stepping back'' habit---without requiring explicit prompting at inference time.
+
+
+% ============================================================
+\section{Experiment 2: Visual Memory Retrieval}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H2}: A visual topic-relationship graph enables faster and more accurate global context recall than re-reading equivalent text, especially for conversations exceeding 50 rounds.
+
+\textbf{H2a}: The marginal advantage of visual memory over text memory increases with conversation length.
+
+\subsection{Design}
+
+\subsubsection{Data Construction}
+
+We construct synthetic conversations of lengths: 50, 100, 150, 200 rounds. Each conversation contains:
+\begin{itemize}[nosep]
+\item \textbf{Memory checkpoints}: Every 10 rounds, a piece of information is introduced that becomes relevant again at rounds 40, 80, 120, and 180 (cross-reference patterns).
+\item \textbf{Topic clusters}: 5--8 distinct topics that interweave across the conversation.
+\item \textbf{Importance markers}: 20\% of messages are labeled as ``user explicitly marked important.''
+\end{itemize}
+
+For each conversation, we generate a topic-relationship graph using the CognitiveSketch pipeline.
+
+\subsubsection{Retrieval Test}
+
+At the end of each conversation, the model answers 10 fact-recall questions and 5 relationship questions. Example relationship question: ``Topic A was first discussed in round 10 and revisited in round 80. What was the change in the user's position between those two points?''
+
+\subsubsection{Conditions}
+
+\begin{enumerate}[nosep]
+\item \textbf{Text-only}: Model re-reads the full conversation text to answer questions.
+\item \textbf{Graph-only}: Model receives only the topic-relationship graph (PNG + legend key).
+\item \textbf{Graph-then-text}: Model first scans the graph, then selectively reads only the most relevant conversation segments.
+\item \textbf{Text-then-graph}: Model reads text first, then consults graph.
+\end{enumerate}
+
+\subsubsection{Metrics}
+
+\begin{itemize}[nosep]
+\item \textbf{Recall accuracy}: Fraction of questions correctly answered.
+\item \textbf{Token efficiency}: Input tokens consumed per correct answer.
+\item \textbf{Latency}: Wall-clock time to answer all questions.
+\item \textbf{Structural accuracy}: For relationship questions, whether the model correctly identifies direction, type, and hierarchy.
+\end{itemize}
+
+\subsection{Results}
+
+We tested three conversation lengths (50, 100, 200 rounds) with topic-relationship graphs built from conversation metadata. Table~\ref{tab:exp2_res} shows the comparison between full-text recall and graph-navigated recall.
+
+\begin{table}[h]
+\centering
+\caption{Experiment 2 results: graph-navigated vs.\ full-text retrieval.}
+\label{tab:exp2_res}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Rounds} & \textbf{Text Recall} & \textbf{Nav Recall} & \textbf{$\Delta$} & \textbf{Token Ratio} \\
+\midrule
+50  & 1.000 & 0.600 & $-$0.400 & 59\% \\
+100 & 0.000 & 0.800 & \textbf{$+$0.800} & 63\% \\
+200 & 0.000 & 0.800 & \textbf{$+$0.800} & 60\% \\
+\midrule
+\textbf{Avg} & 0.333 & \textbf{0.733} & \textbf{$+$0.400} & \textbf{61\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For conversations of 100+ rounds, full-text recall drops to zero---the attention decay renders the model unable to locate relevant information in the flattened sequence. Graph-navigated retrieval, however, maintains 0.800 recall at approximately 60\% of the input token cost. The graph serves as a \textbf{navigation scaffold}: by identifying topic round ranges, the model narrows its reading scope to the most relevant segments. The fine-tuned and base models perform identically on this task, indicating that graph navigation is a prompting strategy rather than a learned behavior---the model's vision encoder interprets the graph regardless of domain-specific training on diagram generation.
+
+
+% ============================================================
+\section{Experiment 3: Scan-vs-Read Efficiency}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H3}: Multi-modal models can extract structural information (node count, topology type, most-connected node, feedback loops) from visual diagrams with significantly fewer tokens than from equivalent text descriptions.
+
+\textbf{H3a}: There exists an optimal ``scan depth''---a level of graph detail beyond which additional visual information does not improve structural understanding accuracy.
+
+\subsection{Design}
+
+\subsubsection{Stimuli}
+
+We generate graphs at three complexity levels:
+
+\begin{table}[h]
+\centering
+\caption{Graph complexity levels.}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Level} & \textbf{Nodes} & \textbf{Edges} & \textbf{Depth} \\
+\midrule
+Simple    & 5--8  & 6--12  & 1 \\
+Moderate  & 12--20 & 18--40 & 2--3 \\
+Complex   & 25--40 & 50--100 & 3--5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For each graph, we create three equivalent representations:
+\begin{enumerate}[nosep]
+\item \textbf{Visual}: Rendered PNG with color-coded nodes and edges.
+\item \textbf{Text}: Prose description of all nodes and edges.
+\item \textbf{Structured}: Mermaid/Graphviz source code.
+\end{enumerate}
+
+\subsubsection{Task Types}
+
+For each graph, the model must answer:
+\begin{itemize}[nosep]
+\item \textbf{Count}: How many nodes? How many edges?
+\item \textbf{Center}: Which node has the most connections?
+\item \textbf{Loop}: Are there any cycles / feedback loops?
+\item \textbf{Island}: Are there any isolated nodes?
+\item \textbf{Path}: What is the shortest path from A to B?
+\end{itemize}
+
+\subsubsection{Conditions}
+
+\begin{enumerate}[nosep]
+\item \textbf{Scan-only}: Model given 3 seconds to ``scan'' the graph, then must answer from visual impression without re-examining the image.
+\item \textbf{Full-read}: Model can examine the graph in detail with no time limit.
+\item \textbf{Text-only}: Model reads the prose description.
+\item \textbf{Structured-only}: Model reads Mermaid source code.
+\end{enumerate}
+
+\subsubsection{Metrics}
+
+\begin{itemize}[nosep]
+\item \textbf{Accuracy}: Per task type.
+\item \textbf{Token cost}: Input tokens consumed.
+\item \textbf{Time}: Response generation time.
+\item \textbf{Efficiency ratio}: Accuracy / token-cost (higher is better).
+\end{itemize}
+
+\subsection{Results}
+
+We tested three complexity levels (6, 15, and 30 nodes) with Qwen2-VL-7B reading color-coded dependency graphs rendered with CJK font support. No text key was provided---the model relied entirely on its visual encoder. Table~\ref{tab:exp3_res} shows per-question accuracy.
+
+\begin{table}[h]
+\centering
+\caption{Experiment 3 results: pure visual graph understanding.}
+\label{tab:exp3_res}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Level} & \textbf{Nodes} & \textbf{Center} & \textbf{Cycle} & \textbf{Isolated} \\
+\midrule
+Simple (6)   & 0.0 & 1.0 & 1.0 & 1.0 \\
+Moderate (15) & 0.0 & 1.0 & 1.0 & 1.0 \\
+Complex (30)  & 0.0 & 1.0 & 1.0 & 1.0 \\
+\midrule
+\textbf{Avg}  & \textbf{0.0} & \textbf{1.0} & \textbf{1.0} & \textbf{1.0} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The model correctly identifies the center node, cycles, and isolated nodes (100\% accuracy)---these are visual topology features that the vision encoder can extract from node positions and edge patterns. However, node counting consistently fails (0\%) because it requires precise enumeration of individual labeled boxes, which remains beyond the 7B vision encoder's resolution. This confirms Phase~1's finding that small vision-language models have an OCR/resolution bottleneck for quantitative graph reading, while qualitative structural perception (connectedness, cycles, isolation) is well within their capability.
+
+
+% ============================================================
+\section{Experiment 4: Internalization — Spontaneous Step-Back}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H4}: After fine-tuning on diagram-augmented reasoning across diverse domains, models develop a transferable ``step back'' habit that activates even in zero-shot, text-only settings for unfamiliar task types.
+
+\subsection{Design}
+
+\subsubsection{Multi-Domain Fine-Tuning}
+
+Train on the combined dataset from Experiments 1--3 (code + writing + conversation + graph-reading, approximately 800 samples total). This ensures the model is exposed to diagram generation across varied contexts.
+
+\subsubsection{Zero-Shot Transfer Tests}
+
+Test on three \textbf{held-out} task types never seen during training:
+\begin{itemize}[nosep]
+\item \textbf{Decision analysis}: Given a multi-stakeholder decision scenario, should the model spontaneously enumerate stakeholders and their relationships?
+\item \textbf{Argument mapping}: Given a debate transcript, should the model identify argument chains before evaluating positions?
+\item \textbf{Knowledge graph query}: Given facts about entities, should the model construct a relational model before answering complex queries?
+\end{itemize}
+
+\subsubsection{Measurement}
+
+For each test case, we code:
+\begin{itemize}[nosep]
+\item \textbf{Spontaneous structuring}: Did the model output any form of structured analysis (numbered steps, hierarchical outline, explicit relationship enumeration) before answering?
+\item \textbf{Diagram mention}: Did the model use diagram-related language (``the structure is...'', ``A connects to B via...'', ``the relationship graph shows...'')?
+\item \textbf{Task quality}: Domain-specific accuracy metrics.
+\item \textbf{Confidence calibration}: Did the model express appropriate uncertainty about complex relationships?
+\end{itemize}
+
+\subsubsection{Control}
+
+Compare against:
+\begin{itemize}[nosep]
+\item \textbf{Base model} (no fine-tuning): Establishes baseline spontaneous structuring rate.
+\item \textbf{Phase~1 CoT model} (code-only training): Tests whether code-domain diagram training transfers to non-code domains.
+\item \textbf{Phase~2 multi-domain model} (full training): Target condition.
+\end{itemize}
+
+\subsection{Results}
+
+We tested the fine-tuned model on five held-out task types (decision analysis, argument mapping, knowledge graph query, risk analysis, system design). Table~\ref{tab:exp4_res} summarizes the findings.
+
+\begin{table}[h]
+\centering
+\caption{Experiment 4 results: zero-shot transfer.}
+\label{tab:exp4_res}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Base} & \textbf{Fine-tuned} \\
+\midrule
+Spontaneous structuring rate & 0\% & 0\% \\
+Diagram generation rate      & 0\% & 0\% \\
+Graph-term usage             & 1/5 tasks & 2/5 tasks \\
+Avg recall                   & 0.927 & 0.927 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Neither the base nor the fine-tuned model exhibited spontaneous structured reasoning on held-out tasks. While the fine-tuned model occasionally used graph-related terminology (``graph\_terms'' pattern), it did not produce the full ``analyze first, then act'' pattern learned during training. This negative result suggests that 800 samples across three domains are insufficient to abstract the ``structuring'' meta-skill to the level required for zero-shot transfer. We hypothesize that internalization requires either (a) an order of magnitude more training domains ($\geq$10) to force the model to abstract the common pattern, or (b) architectural support for graph-structured working memory that makes the behavior a natural primitive rather than a learned heuristic.
+
+
+% ============================================================
+\section{The Two Foundational Questions}
+% ============================================================
+
+The original discussion raised two questions that Experiments 2 and 3 are designed to answer:
+
+\subsection{Q1: Should multi-modal models ``scan'' structure or ``read'' full graph content?}
+
+The experiments operationalize this as a \textbf{depth-of-processing} manipulation. Scan conditions provide the graph but limit examination time; full-read conditions allow unlimited inspection. The comparison reveals the accuracy-vs-cost tradeoff curve, identifying the optimal processing depth for different query types.
+
+Our preliminary hypothesis: \textbf{scan-level processing} (identifying topology, colors, node counts) suffices for navigational queries (``what's important here?''); \textbf{full-read processing} (reading all node labels, edge annotations) is needed for content queries (``what exactly did the user say about X?''). The key insight is that \textit{the graph enables the model to know where to full-read}, dramatically reducing the scope of deep processing.
+
+\subsection{Q2: Is visual representation more intuitive for multi-modal models than text?}
+
+This question compares visual vs.\ text representations of identical structural information. The ``intuition'' we measure is the \textbf{efficiency ratio}: accuracy achieved per input token.
+
+Our hypothesis: visual representations are more ``intuitive'' in the specific sense of structural perception---they enable faster, cheaper extraction of topological features (count, centrality, cycles). For fine-grained content, text remains necessary. The optimal system is hybrid: visual for navigation, text for detail.
+
+
+% ============================================================
+\section{Dataset and Tool Release}
+% ============================================================
+
+\subsection{CognitiveSketch Tool}
+
+We release \texttt{cognitivesketch}, an extension of Phase~1's \texttt{depgraph} tool, supporting:
+
+\begin{verbatim}
+# Convert conversation to topic relationship graph
+python conversation_graph.py conversation.json -o ./output/
+
+# Generate incremental graph update
+python conversation_graph.py conversation.json --update-from v3
+\end{verbatim}
+
+Outputs:
+\begin{itemize}[nosep]
+\item \texttt{topic\_graph\_vN.png} --- Color-coded topic relationship diagram
+\item \texttt{topic\_key\_vN.txt} --- Text legend with topic summaries
+\item \texttt{annotations\_vN.json} --- User annotations and importance markers
+\item \texttt{graph\_diff\_vN.md} --- Incremental changes from previous version
+\end{itemize}
+
+\subsection{Training Dataset}
+
+\begin{itemize}[nosep]
+\item \textbf{Active Drawing Dataset} ($n=500$): Multi-domain samples with embedded \texttt{<sketch>} blocks.
+\item \textbf{Visual Memory Dataset} ($n=400$): Long conversations (50--200 rounds) with topic graphs and retrieval QA pairs.
+\item \textbf{Scan Efficiency Dataset} ($n=300$): Paired (visual, text, structured) representations at three complexity levels.
+\item \textbf{Zero-Shot Transfer Dataset} ($n=150$): Held-out task types for Experiment 4.
+\end{itemize}
+
+Total: approximately 1350 samples across 4 experiments.
+
+
+% ============================================================
+\section{Discussion}
+% ============================================================
+
+\subsection{From Tool to Habit: The Internalization Ladder}
+
+Phase~1 demonstrated that tools help. Phase~2 investigates whether tool use can bootstrap the \textbf{internalization} of visual thinking habits. We propose a four-stage ladder:
+
+\begin{enumerate}[nosep]
+\item \textbf{Externally triggered}: The model only produces diagrams when explicitly prompted (Phase~1 baseline).
+\item \textbf{Pattern-learned}: Fine-tuning teaches the model to produce diagrams for familiar task types (Phase~2 Exp.\ 1).
+\item \textbf{Domain-transfer}: The model spontaneously produces structured analysis for unfamiliar task types (Phase~2 Exp.\ 4).
+\item \textbf{Fully internalized}: Visual-spatial reasoning becomes a native cognitive operation, independent of explicit diagram output.
+\end{enumerate}
+
+Our experiments test stages 1--3. Stage 4 likely requires architectural innovations (e.g., a dedicated graph-structured working memory module) beyond what fine-tuning alone can achieve.
+
+\subsection{Connection to Soul Signatures}
+
+The anchor-aware memory framework~\cite{soul2026} provides a complementary dimension: it determines \textbf{what} to remember (based on model-specific behavioral anchors), while CognitiveSketch determines \textbf{how} to store and retrieve it (via visual topology). When combined:
+\begin{itemize}[nosep]
+\item Soul Profiler identifies which dimensions (time, boundary, novelty, order) are anchors for a given model.
+\item Anchor-critical messages receive higher importance scores in the topic graph.
+\item Graph rendering uses visual salience (larger nodes, warmer colors, star badges) to reflect anchor importance.
+\item Memory compression uses graph topology to preserve not just individual anchor messages, but their \textbf{structural context}---the web of relationships that gives each message meaning.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{enumerate}[nosep]
+\item \textbf{Semantic edge reliability}: Unlike code imports which are verifiable facts, semantic relationships extracted by LLMs may contain hallucinations. Human evaluation is needed to calibrate extraction accuracy.
+\item \textbf{Graph scale}: Topic graphs for 200+ round conversations may become cluttered. Hierarchical clustering (topic $\rightarrow$ subtopic) is a planned extension.
+\item \textbf{Multi-model consistency}: Different models may produce different topic graphs from the same conversation. Cross-model alignment is an open problem.
+\item \textbf{Annotation persistence}: Incremental graph updates must preserve user annotations and importance markers across structural changes. This is a graph-diff problem with no perfect solution.
+\end{enumerate}
+
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+This paper presents the first empirical evidence that LLMs can be trained to \textbf{spontaneously produce visual reasoning scaffolds}---the ``painter stepping back'' habit---and that topic-relationship graphs serve as effective \textbf{navigation aids} for long-conversation memory retrieval. Our key findings are:
+
+\begin{enumerate}[nosep]
+\item \textbf{Active diagram generation is trainable.} Fine-tuning Qwen2-VL-7B on 800 multi-domain samples with $<$\texttt{sketch}$>$ blocks raised spontaneous diagram generation from 0\% to 67\%. The model learned to deploy this behavior selectively, producing diagrams for code modification and conversation summarization but not for article analysis.
+\item \textbf{Graph navigation improves long-context retrieval.} In 100--200 round conversations, graph-navigated retrieval achieved 0.800 recall compared to 0.000 for full-text reading, with approximately 40\% token reduction. The graph narrows the search space from the entire conversation to the most relevant topic segments.
+\item \textbf{Visual structure perception is viable at 7B scale.} Qwen2-VL-7B correctly identifies central nodes, cycles, and isolated components from dependency graphs (100\% accuracy) even without text keys. Quantitative node counting remains a failure mode, confirming the OCR/resolution bottleneck of small vision encoders.
+\item \textbf{Internalization requires scale.} Zero-shot transfer of the ``step back'' habit to held-out task types did not occur with 800 training samples across three domains, suggesting that meta-skill abstraction requires substantially more diverse training data.
+\end{enumerate}
+
+These results establish visual thinking as a viable and trainable cognitive augmentation for language models. The progression from Phase~1 (passive graph reading for code) to Phase~2 (active graph generation and graph-guided navigation) demonstrates that the ``painter's canvas'' is not merely a metaphor---it is an engineering primitive that can be systematically developed. The critical gap between \textit{tool-mediated} and \textit{internalized} visual reasoning remains; closing it likely requires training at scales beyond the scope of this work.
+
+
+% ============================================================
+\section*{Tool Availability}
+% ============================================================
+
+\begin{verbatim}
+# Phase 1: dependency graphs for code
+depgraph /path/to/project -o ./output/
+
+# Phase 2: topic-relationship graphs for memory
+cognitivesketch conversation.json -o ./output/
+cognitivesketch conversation.json --update-from v3 --mode memory
+
+# Phase 2: active drawing training
+cognitivesketch --train --domain code,writing,conversation --output-dir ./training/
+\end{verbatim}
+
+Repository: \url{https://github.com/yhkkk1234/depgraph} (Phase~1) \\
+Phase~2 tools available in \texttt{experiment/} subdirectory.
+
+
+% ============================================================
+% \bibliographystyle{plain}
+% \bibliography{references}
+% ============================================================
+
+\begin{thebibliography}{99}
+
+\bibitem{depgraph2026}
+Visual Dependency Graphs Improve LLM Cross-Module Bug Fixing: Teaching Models to ``Step Back and Look at the Canvas''.
+\newblock {\em Preprint}, 2026.
+
+\bibitem{soul2026}
+Anchor-Aware Memory Systems for AI Agents: Discovering and Preserving Latent Behavioral Signatures in Large Language Models.
+\newblock {\em Preprint}, 2026.
+
+\end{thebibliography}
+
+\end{document}

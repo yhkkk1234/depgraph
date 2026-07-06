@@ -1,6 +1,6 @@
 training_data/
 results/
+output_phase2/
 __pycache__/
 *.pyc
 .DS_Store
-__pycache__/

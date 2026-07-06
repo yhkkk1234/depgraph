@@ -9,7 +9,20 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import networkx as nx
+
+# ── CJK font support ──
+_CJK_FONT = None
+for _f in fm.fontManager.ttflist:
+    if _f.name in ("SimHei", "Microsoft YaHei", "Noto Sans CJK SC",
+                   "WenQuanYi Micro Hei", "WenQuanYi Zen Hei",
+                   "Noto Sans CJK", "Noto Sans SC"):
+        _CJK_FONT = _f.name
+        break
+if _CJK_FONT:
+    plt.rcParams["font.sans-serif"] = [_CJK_FONT, "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
 
 
 def render_dependency_graph(graph: dict, highlight_module: str = None,
