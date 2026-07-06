@@ -100,6 +100,27 @@ def _imports_rs(fp: Path) -> list[str]:
     return imports
 
 
+def _imports_vue(fp: Path) -> list[str]:
+    """Extract imports from Vue SFC <script> blocks."""
+    imports = []
+    try:
+        text = _safe_read(fp)
+    except Exception:
+        return imports
+    # Find <script> blocks (non-setup)
+    for script_match in re.finditer(r"<script[^>]*>(.*?)</script>", text, re.DOTALL):
+        script_body = script_match.group(1)
+        for m in re.finditer(r"""(?:from\s+['"]|require\s*\(\s*['"]|import\s*\(\s*['"])(\.\.?/[^'"]+|@/[^'"]+)""", script_body):
+            path = m.group(1)
+            if path.startswith("./") or path.startswith("../"):
+                resolved = (fp.parent / path).resolve()
+                try:
+                    imports.append(_module_path(resolved, fp.parent.parent.parent))
+                except (ValueError, OSError):
+                    pass
+    return imports
+
+
 # ── Language config ──
 
 LANG_CONFIG = {
@@ -108,6 +129,7 @@ LANG_CONFIG = {
     ".ts":  {"resolver": _module_path, "extractor": _imports_js,  "globs": ["*.ts"]},
     ".jsx": {"resolver": _module_path, "extractor": _imports_js,  "globs": ["*.jsx"]},
     ".tsx": {"resolver": _module_path, "extractor": _imports_js,  "globs": ["*.tsx"]},
+    ".vue": {"resolver": _module_path, "extractor": _imports_vue, "globs": ["*.vue"]},
     ".go":  {"resolver": _module_path, "extractor": _imports_go,  "globs": ["*.go"]},
     ".rs":  {"resolver": _module_path, "extractor": _imports_rs,  "globs": ["*.rs"]},
 }
@@ -125,7 +147,8 @@ def scan_project(project_root: str) -> dict:
         for g in cfg["globs"]:
             all_files.extend(root.rglob(g))
 
-    all_files = [f for f in all_files if "__pycache__" not in str(f) and "node_modules" not in str(f)]
+    all_files = [f for f in all_files if not any(skip in str(f) for skip in
+                ("__pycache__", "node_modules", "dist", ".git", "target"))]
 
     # Determine resolver/extractor per file
     def get_cfg(fp):
