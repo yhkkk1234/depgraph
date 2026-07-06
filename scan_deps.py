@@ -100,24 +100,28 @@ def _imports_rs(fp: Path) -> list[str]:
     return imports
 
 
-def _imports_vue(fp: Path) -> list[str]:
-    """Extract imports from Vue SFC <script> blocks."""
+def _imports_vue(fp: Path, root: Path = None) -> list[str]:
+    """Extract imports from Vue SFC <script setup> and <script> blocks."""
     imports = []
     try:
         text = _safe_read(fp)
     except Exception:
         return imports
-    # Find <script> blocks (non-setup)
-    for script_match in re.finditer(r"<script[^>]*>(.*?)</script>", text, re.DOTALL):
+    # Match <script>, <script setup>, <script lang="ts"> etc.
+    for script_match in re.finditer(r"<script\b[^>]*>(.*?)</script>", text, re.DOTALL | re.IGNORECASE):
         script_body = script_match.group(1)
-        for m in re.finditer(r"""(?:from\s+['"]|require\s*\(\s*['"]|import\s*\(\s*['"])(\.\.?/[^'"]+|@/[^'"]+)""", script_body):
+        # Match ES module imports and dynamic imports
+        for m in re.finditer(r"""(?:from\s+['"]|import\s*\(\s*['"])([^'"]+)['"]""", script_body):
             path = m.group(1)
             if path.startswith("./") or path.startswith("../"):
-                resolved = (fp.parent / path).resolve()
-                try:
-                    imports.append(_module_path(resolved, fp.parent.parent.parent))
-                except (ValueError, OSError):
-                    pass
+                if root:
+                    try:
+                        resolved = (fp.parent / path).resolve()
+                        imports.append(_module_path(resolved, root))
+                    except (ValueError, OSError):
+                        pass
+                else:
+                    imports.append(path.replace("./", "").replace("../", ""))
     return imports
 
 
@@ -147,8 +151,8 @@ def scan_project(project_root: str) -> dict:
         for g in cfg["globs"]:
             all_files.extend(root.rglob(g))
 
-    all_files = [f for f in all_files if not any(skip in str(f) for skip in
-                ("__pycache__", "node_modules", "dist", ".git", "target"))]
+    SKIP_DIRS = {"__pycache__", "node_modules", "dist", ".git", "target", "build", "out", ".next"}
+    all_files = [f for f in all_files if not any(skip in f.parts for skip in SKIP_DIRS)]
 
     # Determine resolver/extractor per file
     def get_cfg(fp):
@@ -173,7 +177,7 @@ def scan_project(project_root: str) -> dict:
         extractor = cfg["extractor"]
         # Pass root to extractors that need it
         try:
-            file_imports = extractor(fpath, root) if extractor.__name__ == "_imports_js" else extractor(fpath)
+            file_imports = extractor(fpath, root) if extractor.__name__ in ("_imports_js", "_imports_vue") else extractor(fpath)
         except TypeError:
             file_imports = extractor(fpath)
 
