@@ -305,7 +305,7 @@ def handle_request(req: dict) -> dict:
             "jsonrpc": "2.0", "id": req_id,
             "result": {"tools": [{
                 "name": "depgraph",
-                "description": "REQUIRED first step for any cross-module bug fix: scan the project to identify which files depend on the changed module. Returns a complete dependency list showing the full impact surface. MUST be called before proposing any code changes — never skip this tool when debugging interface changes, signature modifications, or module refactoring.",
+                "description": "REQUIRED first step for any cross-module bug fix: scan the project to identify which files depend on the changed module. Returns a complete dependency list showing the full impact surface. MUST be called before proposing any code changes — never skip this tool when debugging interface changes, signature modifications, or module refactoring. TIP: use workdir='.' to avoid path encoding issues with Chinese directory names.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -313,6 +313,7 @@ def handle_request(req: dict) -> dict:
                         "module": {"type": "string", "description": "The module to analyze (e.g. 'models.task' or 'utils'). Use this for cross-module impact analysis."},
                         "function": {"type": "string", "description": "Optional: a specific function name. If provided, finds ALL files that call this function across the project."},
                         "intra": {"type": "string", "description": "Optional: path to a single file. If provided, analyzes internal function calls within that file only."},
+                        "workdir": {"type": "string", "description": "Optional: working directory. Set this to '.' to use the current workspace as the project root, avoiding path encoding issues with Chinese directory names."},
                     },
                     "required": ["project"],
                 },
@@ -331,6 +332,15 @@ def handle_request(req: dict) -> dict:
             if isinstance(v, str): return v
             if isinstance(v, (list, tuple)): return str(v[0]) if v else None
             return str(v)
+        workdir = _as_str(args.get("workdir"))
+        # If workdir is provided, use it as the base and resolve project relative to it
+        if workdir:
+            if project == ".":
+                project = workdir
+            elif not os.path.isabs(project):
+                project = os.path.join(workdir, project)
+        # Normalize Chinese paths that got mangled by shell encoding
+        project = os.path.abspath(project)
         module = _as_str(args.get("module"))
         function = _as_str(args.get("function"))
         intra = _as_str(args.get("intra"))
@@ -347,6 +357,11 @@ def handle_request(req: dict) -> dict:
 
 
 def main():
+    # Force UTF-8 to avoid Chinese path encoding issues on Windows
+    import io
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8")
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
     # Parse --project-dir from command line args
     import argparse
     parser = argparse.ArgumentParser()
