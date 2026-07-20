@@ -1,6 +1,8 @@
 training_data/
 results/
 output_phase2/
+phase3_output/
+.temp_eval_pngs/
 __pycache__/
 *.pyc
 .DS_Store

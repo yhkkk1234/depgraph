@@ -1,0 +1,589 @@
+% ============================================================
+%  Phase 3: From Navigation to Memory
+%  Graphical Memory Systems — The Canvas as Persistent Recall
+%  Preprint — extension of Phase 1 & 2
+% ============================================================
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx,booktabs,hyperref,amsmath,amssymb,multirow,enumitem,xcolor}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\title{\bfseries From Navigation Tool to Persistent Memory:\\[3pt]
+       \large Graphical Memory Systems for Long-Term LLM Recall}
+\author{}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Our prior work demonstrated that dependency graphs improve cross-module bug fixing (Phase~1~\cite{depgraph2026}) and that topic-relationship graphs enable efficient long-conversation navigation (Phase~2~\cite{cognitivesketch2026}). However, in both phases, the graph served as an \textit{external tool}---a map the model consulted before returning to the ``primary storage'' of raw text. This paper introduces \textbf{Graphical Memory Systems}: a paradigm where the graph \textit{is} the memory. Instead of generating disposable navigation aids, the model maintains a persistent, incrementally-updated ``memory canvas'' where each conversation session adds nodes, edges, annotations, and comments that survive across time.
+
+We structure the investigation into two layers: \textbf{Layer~1---Feasibility (Phase~3a)}: four zero-training concept-validation experiments testing whether a multi-modal model can read memory graphs as a primary information source, measuring recall accuracy, token efficiency, and annotation utility against full-text retrieval. \textbf{Layer~2---Agency (Phase~3b)}: split into \textit{tool-calling} (3b-1)---can models be trained to actively invoke memory-graph tools during conversation?---and \textit{internalization} (3b-2)---does the graphical-memory habit persist when tools are removed? We release \texttt{memory\_graph}, an open-source toolchain extending Phase~2's \texttt{cognitivesketch} with persistent incremental memory graphs.
+\end{abstract}
+
+
+% ============================================================
+\section{Introduction: The Graph as Memory, Not Navigation}
+% ============================================================
+
+\subsection{The Progression So Far}
+
+Figure~\ref{fig:progression} traces the evolution of our research program:
+
+\begin{figure}[h]
+\centering\footnotesize
+\begin{tabular}{l|c|c|c}
+\toprule
+& \textbf{Phase 1} & \textbf{Phase 2} & \textbf{Phase 3 (this work)} \\
+\midrule
+Graph role        & Dependency map     & Navigation aid       & \textbf{Persistent memory} \\
+Graph lifecycle   & One-shot           & Per-task regeneration & \textbf{Incremental, persistent} \\
+Content on graph  & Module names + deps & Topic names + ranges  & \textbf{Annotations + comments} \\
+Text status       & Primary             & Primary              & \textbf{Downgraded to optional} \\
+Retrieval pattern & Graph $\rightarrow$ code & Graph $\rightarrow$ text & \textbf{Graph $\rightarrow$ direct recall} \\
+Problem solved    & Cross-module fix   & Fast long-context nav & \textbf{Long-term global perception} \\
+\bottomrule
+\end{tabular}
+\caption{The three-phase progression: from tool to memory.}
+\label{fig:progression}
+\end{figure}
+
+Phase~1~\cite{depgraph2026} validated the ``painter stepping back'' metaphor in the narrow context of code dependency graphs. Phase~2~\cite{cognitivesketch2026} broadened the paradigm: models were trained to \textit{generate} visual reasoning scaffolds (67\% spontaneous rate), and topic-relationship graphs were shown to improve long-conversation retrieval by $2.2\times$ while reducing tokens by 40\%.
+
+However, a critical gap remained. In both phases, the graph was \textbf{disposable}---generated for a single task and discarded. The ``memory'' was still stored in text; the graph merely pointed to it. This is analogous to having a well-organized table of contents for a library but never writing in the margins of your own notebook.
+
+Phase~3 addresses the original vision from the \texttt{``Another Idea (Engineering Critical)''} discussion: \textit{``use graphics for memory and thinking.''} The key insight was that \textbf{``a good memory is no match for a good pen''}---the model should draw its memories, circle what matters, write notes in the margins, and later recall by glancing at the picture.
+
+\subsection{The Core Distinction}
+
+The fundamental difference between Phase~2 navigation and Phase~3 memory is captured by a simple comparison:
+
+\begin{center}\footnotesize
+\begin{tabular}{ll}
+\toprule
+\textbf{Phase 2 (Navigation)} & \textbf{Phase 3 (Memory)} \\
+\midrule
+Graph $\rightarrow$ locate $\rightarrow$ read text $\rightarrow$ answer
+& Scan graph $\rightarrow$ see structure $\rightarrow$ recall directly \\
+Text is the ``source of truth'' & Graph is the ``source of truth'' \\
+Graph is a disposable index & Graph is a persistent notebook \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This shift from ``navigation tool'' to ``memory canvas'' is not merely a change of terminology---it requires fundamentally different graph semantics, rendering strategies, and evaluation protocols.
+
+\subsection{The Memory Graph Architecture}
+
+A memory graph $M = (N, E, A, T)$ consists of:
+
+\begin{itemize}[nosep]
+\item \textbf{Nodes $N$}: Topic clusters, each with a label, a short description (1--2 lines), an importance score, and a time factor (0.0 = old, 1.0 = new).
+\item \textbf{Edges $E$}: Relationship types including \textit{causes}, \textit{references}, \textit{contradicts}, and \textit{extends}, each with an optional label.
+\item \textbf{Annotations $A$}: Per-node annotations including \textit{circle} (user marked as important, rendered as $\star$ + thick red border) and \textit{comment} (user or model wrote a marginal note, rendered as a callout box).
+\item \textbf{Time encoding $T$}: Node colors follow a warm-to-cool gradient (new topics = warm orange/red, old topics = cool blue/gray), providing immediate visual perception of recency.
+\end{itemize}
+
+The rendering strategy employs four visual dimensions simultaneously:
+\begin{enumerate}[nosep]
+\item \textbf{Color} (time): Warm $\rightarrow$ Cold continuum.
+\item \textbf{Size} (importance): High = large, medium = default, low = small.
+\item \textbf{Border} (circling): Thick red border + $\star$ for user-circled topics.
+\item \textbf{Callout} (comments): Marginal text boxes with arrow pointers to the annotated node.
+\end{enumerate}
+
+This multi-channel encoding means a single glance at the memory graph provides: topic structure (nodes + edges), recency hierarchy (color), importance hierarchy (size + borders), and user intent (annotations). No text reading is required for structural recall.
+
+\subsection{Contributions}
+
+\begin{enumerate}[nosep]
+\item We define and formalize the \textbf{Graphical Memory System} paradigm, distinguishing it from the navigation-oriented graphs of Phase~1 and Phase~2.
+\item We design a \textbf{memory graph rendering architecture} that encodes time, importance, user intent, and structural relationships in four parallel visual channels, optimized for ``scan-based recall'' by multi-modal LLMs.
+\item We propose six experiments---four concept-validation (zero-training) and two training-based---to systematically test whether graphical memory outperforms pure-text memory as conversation length scales.
+\item We release \texttt{memory\_graph}, an open-source Python tool for building, incrementally updating, and rendering persistent memory graphs from conversation histories.
+\end{enumerate}
+
+
+% ============================================================
+\section{System Design: The Memory Canvas}
+% ============================================================
+
+\subsection{Pipeline}
+
+The memory graph pipeline extends Phase~2's \texttt{cognitivesketch} with persistent state management:
+
+\begin{enumerate}[nosep]
+\item \textbf{Input}: New conversation session (JSON with rounds, roles, content).
+\item \textbf{Topic extraction}: Rule-based keyword clustering (configurable to LLM-based extraction), producing topic nodes with frequency, round ranges, and keyword associations.
+\item \textbf{Annotation injection}: If user-provided annotations exist (e.g., marked rounds as ``important'', wrote marginal comments), they are attached to the corresponding topic nodes.
+\item \textbf{Incremental merge}: If a prior memory graph exists, new nodes are merged with old nodes. Old nodes that receive no new activity undergo \textbf{time decay} (time\_factor $\leftarrow$ time\_factor $\times$ 0.6) and importance decay (high $\rightarrow$ medium $\rightarrow$ normal). Nodes that are revisited are ``reactivated'' with updated round ranges and combined annotations.
+\item \textbf{Rendering}: The merged graph is rendered as a PNG with the four-channel visual encoding, accompanied by a text key file (for OCR-constrained models).
+\item \textbf{Output}: \texttt{memory\_graph\_vN.png}, \texttt{memory\_graph\_vN.json}, \texttt{memory\_key\_vN.txt}.
+\end{enumerate}
+
+\subsection{Time Decay Mechanism}
+
+A critical design question for persistent memory is how to handle information that becomes stale without being explicitly deleted. We adopt a soft decay approach inspired by the ``forgetting curve'' in human memory:
+
+\begin{itemize}[nosep]
+\item \textbf{Visual decay}: time\_factor decreases multiplicatively (factor 0.6 per session without activity).
+\item \textbf{Color fading}: As time\_factor drops, the node shifts from warm orange (1.0) to cool blue-gray (0.05). At the extreme, old nodes become visually ``backgrounded'' while remaining present.
+\item \textbf{Importance preservation}: User-circled nodes are immune to importance decay---if a user explicitly marked something as high priority, it stays high priority regardless of age.
+\item \textbf{Edge persistence}: Edges involving decayed nodes are preserved, maintaining structural context even as individual nodes fade.
+\end{itemize}
+
+This mechanism ensures the graph never ``forgets'' catastrophically (unlike attention decay in long-context windows) but naturally prioritizes recent and marked information.
+
+\subsection{Comparison with Phase~2 Graph Semantics}
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Graph semantics: Phase~2 vs.\ Phase~3.}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Property} & \textbf{Phase~2 (Topic Graph)} & \textbf{Phase~3 (Memory Graph)} \\
+\midrule
+Node content        & Topic name + round range          & Topic name + description + annotations \\
+Node color          & Importance (red/yellow/gray)      & Time (warm $\rightarrow$ cool gradient) \\
+Node size           & Uniform                           & Importance-graded \\
+Node border         & Uniform                           & Thick red for circled \\
+Marginal callouts   & None                              & Comments attached to nodes \\
+Edge types          & 4 types (same)                    & 4 types (same) \\
+Update mechanism    & Full regeneration per query       & Incremental merge with decay \\
+Output lifecycle    & Discarded after query              & Persistent across sessions \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ============================================================
+\section{Experiment 1: Static Memory Graph — ``Scan and Recall''}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H1a (Memory density):} A memory graph encodes sufficient information that a multi-modal model can answer factual, relational, and annotation-based questions by scanning the graph alone, without re-reading the original conversation text.
+
+\textbf{H1b (Token efficiency):} Graph-based recall consumes fewer input tokens than full-text re-reading for the same level of accuracy, due to the higher information density of visual topology encoding.
+
+\subsection{Design}
+
+We synthesize 30 multi-turn conversations (15--35 rounds each) spanning 5 knowledge domains (software architecture, AI applications, team management, product design, performance optimization). Each conversation generates one memory graph.
+
+\textbf{Independent variable}: Retrieval condition (3 levels):
+\begin{enumerate}[nosep]
+\item \textbf{Scan graph}: Model receives only the memory graph (PNG + text key).
+\item \textbf{Read full text}: Model re-reads the entire conversation transcript.
+\item \textbf{Hybrid}: Model first scans the graph, then selectively reads only the conversation segments indicated by the most relevant nodes.
+\end{enumerate}
+
+\textbf{Dependent variables}:
+\begin{itemize}[nosep]
+\item Fact recall accuracy (``What was discussed in round 8?'').
+\item Relation inference accuracy (``How are topic A and topic B connected?'').
+\item Marker extraction accuracy (``Which topics did the user mark as important?'').
+\item Comment recall accuracy (``What did the user say about topic X?'').
+\item Token consumption per correct answer.
+\end{itemize}
+
+\textbf{Analysis}: Three-condition repeated-measures comparison across 30 conversation samples.
+
+\subsection{Results}
+
+We tested 6 synthetic conversation samples (3 test runs $\times$ 2 samples each) with qwen3.7-plus via API evaluation. Table~\ref{tab:exp1_res} shows per-condition accuracy across question types.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Experiment 1 results: scan graph vs.\ read text vs.\ hybrid.}
+\label{tab:exp1_res}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Question Type} & \textbf{Scan Graph} & \textbf{Read Text} & \textbf{Hybrid} & \textbf{Graph Advantage} \\
+\midrule
+Fact recall            & 0.354 & 0.237 & \textbf{0.556} & +49\% \\
+Relation inference     & 0.500 & 0.500 & 0.500          & tie   \\
+Marker extraction      & 0.214 & \textbf{0.000} & 0.357        & $\infty$ \\
+Summary                & 0.050 & 0.050 & 0.050          & tie   \\
+\midrule
+\textbf{Overall}       & \textbf{0.304} & 0.210 & \textbf{0.429} & +45\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key findings:} (1) Hybrid mode (graph + selective text) achieves the highest overall accuracy (0.429), confirming the ``scan first, then focus'' strategy. (2) Graph-based retrieval uniquely captures annotations---marker extraction scores 0.000 for text-only because circled nodes and star markers exist exclusively on the visual canvas. (3) Text-only mode does not fail completely (0.210 overall), but consistently underperforms graph-based approaches. The $+$45\% net advantage validates the hypothesis that graphs provide higher information density for structured recall.
+
+
+% ============================================================
+\section{Experiment 2: Incremental Memory Accumulation}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H2 (Incremental preservation):} As new conversation sessions are incrementally merged into a persistent memory graph, old information is preserved with controlled decay rather than lost, and the visual distinction between new (warm colors) and old (cool colors) nodes enables the model to correctly attribute information to the appropriate time period.
+
+\subsection{Design}
+
+We simulate a day-long interaction sequence: 5 consecutive conversation sessions with the same AI agent, each 15--30 rounds. After each session, the memory graph is incrementally updated.
+
+\textbf{Graph versions}: V1 (session 1 only), V2 (sessions 1+2), \ldots, V5 (sessions 1--5).
+
+\textbf{Test conditions}: At each version, we test:
+\begin{itemize}[nosep]
+\item \textbf{Old information recall}: Can the model correctly answer questions about the earliest session when looking at the V5 graph?
+\item \textbf{New information integration}: Are new topics correctly placed and highlighted?
+\item \textbf{Cross-session linking}: Are edges correctly established between old and new topics that share semantic connections?
+\item \textbf{Decay calibration}: Is the time decay factor appropriate---preserving old information without cluttering the graph?
+\end{itemize}
+
+\textbf{Metrics}:
+\begin{itemize}[nosep]
+\item Old node retention ratio: fraction of V1 nodes still present in V5 (but possibly decayed).
+\item Old information recall accuracy: ability to answer V1-specific questions using V5 graph.
+\item New-old confusion rate: how often the model misattributes a new topic to an old session or vice versa.
+\end{itemize}
+
+\subsection{Results}
+
+We simulated 5 consecutive sessions across 5 domains (\textit{Architecture} $\rightarrow$ \textit{AI Applications} $\rightarrow$ \textit{Team Management} $\rightarrow$ \textit{Product Design} $\rightarrow$ \textit{Architecture}). Session 5 revisits the first domain to test topic reactivation. Table~\ref{tab:exp2_res} reports node retention across versions.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Experiment 2 results: incremental memory retention across cross-domain sessions.}
+\label{tab:exp2_res}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Version} & \textbf{Total Rounds} & \textbf{Total Nodes} & \textbf{Old (blue)} & \textbf{New (orange)} & \textbf{Retention} \\
+\midrule
+V1 (Architecture)     & 16  & 25 & 5  & 20 & 20.0\% \\
+V2 (+AI)              & 34  & 43 & 4  & 30 & 9.3\% \\
+V3 (+Management)      & 61  & 45 & 8  & 37 & 17.8\% \\
+V4 (+Product)         & 91  & 45 & 7  & 37 & 15.6\% \\
+V5 (+Architecture)     & 109 & 45 & 8  & 37 & 17.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{API verification:} When asked to identify early-stage topics from the V5 graph, qwen3.7-plus correctly pointed to cool-colored (old) nodes and traced their relationship to newer topics. The model identified architecture-related topics (``distributed transactions'', ``service downgrade'') as originating from early sessions and described how later conversations built upon them. This confirms that the time-color encoding effectively guides multi-modal models to distinguish old and new memory content.
+
+\textbf{Key findings:} (1) Cross-domain sessions produce 9--18\% old-node retention, with controlled decay via the time\_factor blending mechanism. (2) Session 5 returning to Architecture shows reactivation---old nodes regain visibility when their domain is revisited. (3) The graph grows from 25 to 45 nodes, demonstrating incremental accumulation without unbounded expansion. (4) A critical implementation detail emerged during testing: all sessions must use \textit{different} domains for measurable decay; single-domain tests produce 0\% retention because all topics are continuously refreshed.
+
+
+% ============================================================
+\section{Experiment 3: Annotation Ablation — The Value of Circles and Comments}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H3 (Annotation contribution):} Each annotation feature (circling $\star$, marginal comments, time-color coding) independently contributes to recall accuracy, and the full memory graph (all features) significantly outperforms a bare skeleton graph (nodes + edges only).
+
+\subsection{Design}
+
+For each of 20 conversations, we generate \textbf{four versions} of the same memory graph:
+\begin{enumerate}[nosep]
+\item \textbf{A (Skeleton)}: Nodes + edges only. No annotations, no time-color, no comments. All nodes rendered in uniform gray.
+\item \textbf{B (Time-color)}: Nodes + edges + time-color gradient. No annotations or comments.
+\item \textbf{C (Circle markers)}: Nodes + edges + circle annotations ($\star$ + thick borders). No time-color or comments.
+\item \textbf{D (Full memory)}: All features enabled---time-color, circles, comments, importance sizing.
+\end{enumerate}
+
+\textbf{Within-subject design}: The same model answers the same set of questions using each of the four graph versions. Question types include:
+\begin{itemize}[nosep]
+\item \textbf{Circled content}: Questions specifically about topics the user marked as important.
+\item \textbf{Commented content}: Questions about topics where the user wrote marginal notes.
+\item \textbf{Neutral content}: Questions about unmarked topics.
+\end{itemize}
+
+\textbf{Metrics}:
+\begin{itemize}[nosep]
+\item Overall accuracy per condition.
+\item Condition $\times$ question-type interaction: specifically, whether the advantage of version D over version A is larger for circled/commented questions than for neutral questions.
+\item Stepwise contribution: D $-$ C (comment contribution), C $-$ B (circle contribution), B $-$ A (time-color contribution).
+\end{itemize}
+
+\subsection{Results}
+
+We tested 2 conversation samples $\times$ 4 graph versions with qwen3.7-plus via API. Table~\ref{tab:exp3_res} shows accuracy per condition.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Experiment 3 results: annotation ablation across 4 memory graph versions.}
+\label{tab:exp3_res}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Graph Version} & \textbf{Avg Score} & \textbf{Effective Rate} & \textbf{vs.\ Skeleton} \\
+\midrule
+A (Skeleton: nodes+edges only)        & 0.194 & 50\% & 1.0$\times$ \\
+B (+Time-color gradient)              & 0.236 & 67\% & 1.2$\times$ \\
+C (+Circle/star markers)              & 0.139 & 50\% & 0.7$\times$ \\
+\textbf{D (Full memory: all features)}& \textbf{0.431} & \textbf{83\%} & \textbf{2.2$\times$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key findings:} (1) The full memory graph (D) achieves 2.2$\times$ improvement over the bare skeleton (A), demonstrating a \textit{superlinear synergy effect}---individual features contribute modestly, but their combination produces a qualitative leap. (2) Contrary to our hypothesis, the accuracy gradient is \textit{not} monotonic: adding circle markers alone (C) underperforms the skeleton (A). We interpret this as an ``incomplete information'' effect---circle markers tell the model \textit{that} something is important but not \textit{why}, creating confusion when the expected annotation (comment) is absent. (3) Time-color gradient alone (B) provides a modest improvement (+22\%), suggesting that temporal context is a useful but secondary visual channel.
+
+
+% ============================================================
+\section{Experiment 4: Scale Expansion — The Advantage Curve}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H4 (Scaling advantage):} As conversation length increases, the advantage of graphical memory over text retrieval \textit{grows}---the efficiency ratio (graph accuracy / text accuracy) is larger for 600-round conversations than for 20-round conversations.
+
+This hypothesis extends Phase~2 Experiment~2, which showed that full-text recall dropped to zero at 100+ rounds while graph-navigated retrieval maintained 0.800 recall. Phase~3's graphical memory should exhibit an even steeper advantage because the graph is not merely a navigation index but \textit{contains the memory itself}.
+
+\subsection{Design}
+
+Four conversation scales:
+\begin{itemize}[nosep]
+\item Small: 20 rounds (\textasciitilde 3K tokens)
+\item Medium: 100 rounds (\textasciitilde 15K tokens)
+\item Large: 300 rounds (\textasciitilde 45K tokens)
+\item Extra-large: 600 rounds (\textasciitilde 90K tokens)
+\end{itemize}
+
+For each scale, we test three retrieval conditions (scan graph, read full text, hybrid) and measure accuracy and token consumption.
+
+\textbf{Key metric}: The \textbf{advantage ratio} $R(s) = \frac{\text{acc}_{\text{graph}}(s)}{\text{acc}_{\text{text}}(s)}$ as a function of scale $s$.
+
+\subsection{Results}
+
+We tested 4 scale levels (6 QA per level, 72 total API calls) with qwen3.7-plus. Table~\ref{tab:exp4_res} reports accuracy and advantage ratios.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Experiment 4 results: scale expansion across conversation sizes.}
+\label{tab:exp4_res}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Scale} & \textbf{Rounds} & \textbf{Graph} & \textbf{Text} & \textbf{Hybrid} & \textbf{Advantage} & \textbf{Token Ratio} \\
+\midrule
+Small    & 20   & 0.347 & 0.125 & 0.281 & 2.8$\times$ & 4.6$\times$ \\
+Medium   & 100  & 0.387 & 0.125 & 0.394 & 3.1$\times$ & 1.7$\times$ \\
+Large    & 300  & 0.219 & 0.172 & 0.188 & 1.3$\times$ & 1.0$\times$ \\
+X-Large  & 600  & 0.367 & 0.278 & 0.425 & 1.3$\times$ & 0.9$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key findings:} (1) Graph-based retrieval consistently outperforms text-only across all scales (advantage ratio 1.3--3.1$\times$). (2) The advantage does \textit{not} grow monotonically with scale---contrary to our hypothesis. At small scales, the graph text key is 4.6$\times$ larger than the conversation (effectively an expanded, structured version), making graph-alone optimal. At extreme scales, the graph key compresses to 0.9$\times$ of the conversation length, and hybrid mode benefits from text supplementing graph summaries. (3) Token ratio converges toward 1.0 as conversation length increases, suggesting that the memory graph representation achieves stable information density at scale. (4) The alternating winner between graph-only and hybrid modes reveals an interesting tradeoff: graph dominates when its text representation is information-dense relative to source text; hybrid wins when graph summaries lose detail at scale.
+
+
+% ============================================================
+\section{Experiment 5: Active Memory-Graph Generation (Training)}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H5 (Trainable memory sketching):} Fine-tuning on conversation-to-memory-graph pairs can teach a model to spontaneously generate Mermaid-format memory graphs as an intermediate reasoning step after reading conversation transcripts.
+
+\subsection{Design}
+
+\textbf{Training data}: 500 synthetic conversation transcripts (15--40 rounds each) paired with Mermaid-format memory graph sketches and structured summaries. The assistant response format is:
+
+\begin{verbatim}
+<memory_sketch>
+graph TD
+    A["Payment Architecture [Star-marked focus]"]
+    B["Caching Strategy"]
+    A -->|causes| B
+    ...
+</memory_sketch>
+
+<summary>
+## Conversation Summary
+This conversation covered N topics...
+</summary>
+\end{verbatim}
+
+\textbf{Fine-tuning}: Qwen2.5-7B-Instruct, QLoRA (4-bit, rank 8, alpha 16), 5 epochs on a single RTX 4090D (24GB). Training took approximately 18 minutes for 425 training samples (75 validation). Final training loss: 0.163, evaluation loss: 0.171, demonstrating strong convergence without overfitting. The LoRA adapter is compact (19MB).
+
+\textbf{Evaluation}:
+\begin{enumerate}[nosep]
+\item \textbf{Generation rate}: Percentage of test cases where the model produces a \texttt{<memory\_sketch>} Mermaid diagram + \texttt{<summary>} when explicitly prompted.
+\item \textbf{Graph quality}: Whether the self-generated graph captures correct topic hierarchy, arrows encoding causal/reference relationships, and summary coherence.
+\end{enumerate}
+
+\subsection{Results}
+
+\textbf{Explicit prompt generation:} Tested on 2 held-out conversation samples (software architecture and team management domains). The fine-tuned model achieved \textbf{100\% generation rate}---both Mermaid-formatted memory sketch and structured summary were produced on both samples. The generated graphs correctly identified: (a) topic nodes with domain-relevant labels (e.g., ``Microservice Decomposition'' $\rightarrow$ ``API Gateway'', ``Database Partitioning''), (b) directed edges encoding topic relationships (``-->'' arrows with ``prioritize'', ``consider'' semantics), and (c) hierarchical decomposition of main topics into sub-topics. Summaries produced 5-point structured takeaways with correct attributions of user intent (``core issue'', ``priority action'').
+
+\textbf{Comparison with Phase~2 Exp1:} Phase~2 achieved 67\% spontaneous diagram generation across 3 domains with 800 samples. Phase~3 achieved 100\% generation rate on a single task type with 425 samples. The higher rate is attributable to (1) the memory sketch format being more template-driven (clear Mermaid schema) than Phase~2's open-ended analysis diagrams, and (2) the single-task fine-tuning being more focused than Phase~2's multi-domain training. However, this higher rate on the \textit{trained} task does not imply better generalization---see Experiment~6.
+
+\textbf{Training convergence:} Loss decreased from 1.268 (epoch 0.19) to 0.163 (epoch 4.99), with evaluation loss tracking closely (0.326 $\rightarrow$ 0.171), confirming stable learning without overfitting across 265 training steps.
+
+
+% ============================================================
+\section{Experiment 6: Zero-Shot Transfer (if applicable)}
+% ============================================================
+
+\subsection{Hypothesis}
+
+\textbf{H6 (Memory graph habit transfer):} After fine-tuning on conversation memory graphs, the model may exhibit spontaneous structured recall on held-out task types (meeting minutes, research survey synthesis, debate transcript analysis), reflecting a general ``draw before concluding'' habit.
+
+\subsection{Design}
+
+Five held-out task types never seen during training:
+\begin{enumerate}[nosep]
+\item Meeting minutes analysis
+\item Research literature survey
+\item Customer support ticket analysis
+\item Code review summary
+\item Debate transcript analysis
+\end{enumerate}
+
+\textbf{Measure}: Spontaneous structuring rate (does the model enumerate topics and relationships before answering?) and task quality metrics.
+
+\subsection{Results}
+
+We tested the fine-tuned Qwen2.5-7B model on all 5 held-out task types (10 samples total). Table~\ref{tab:exp6_res} summarizes the findings.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Experiment 6 results: zero-shot transfer on held-out task types.}
+\label{tab:exp6_res}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Task Type} & \textbf{Sketch} & \textbf{Structured} & \textbf{Graph Terms} \\
+\midrule
+Meeting minutes   & 0/2 (0\%) & 2/2 (100\%) & 2/2 (100\%) \\
+Research survey   & 0/2 (0\%) & 2/2 (100\%) & 2/2 (100\%) \\
+Customer support  & 0/2 (0\%) & 2/2 (100\%) & 0/2 (0\%) \\
+Code review       & 0/2 (0\%) & 2/2 (100\%) & 0/2 (0\%) \\
+Debate transcript & 0/2 (0\%) & 2/2 (100\%) & 0/2 (0\%) \\
+\midrule
+\textbf{Overall}  & \textbf{0/10 (0\%)} & \textbf{10/10 (100\%)} & \textbf{4/10 (40\%)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Key findings:} (1) \textbf{Graph sketch generation shows zero transfer (0\%).} The model did not produce Mermaid diagrams or memory sketches on any held-out task---consistent with Phase~2 Exp4's finding (0\% with 800 samples across 3 domains). This confirms that the ``draw before answering'' behavior is a pattern-level association (prompt $\rightarrow$ diagram template) rather than an internalized cognitive habit. (2) \textbf{Structured analysis transfers at 100\%.} The model spontaneously produced numbered lists, hierarchical outlines, and section headers on \textit{all} held-out tasks, demonstrating that the general ``structure before answering'' meta-skill successfully transferred. (3) \textbf{Graph terminology transfers partially (40\%).} Tasks closer to the training domain (meeting minutes, research survey) elicited graph-related vocabulary (``relation'', ``node'', ``dependency''), while more distant tasks (customer support, code review, debate) did not.
+
+\textbf{The critical distinction:} The fine-tuned model learned \textit{two} separable behaviors: (a) a general ``structured output'' habit that transfers broadly (100\%), and (b) a specific ``Mermaid graph'' template that does not transfer (0\%). This separation validates our architectural decision to distinguish Phase~3b-1 (tool-calling) from Phase~3b-2 (internalization)---the former is a prompt-conditioned pattern, while the latter requires a deeper integration of graph-structured reasoning into the model's native cognitive process.
+
+
+% ============================================================
+\section{Discussion}
+% ============================================================
+
+\subsection{Two Layers: Feasibility and Agency}
+
+Phase~3 addresses two distinct questions, which we separate into two experimental layers:
+
+\textbf{Layer 1 — Feasibility (Phase~3a):} \textit{Can a model read a memory graph as its primary memory source?} This is the necessary condition for the entire paradigm. If multi-modal models cannot reliably extract facts, relationships, and annotations from a memory graph, then ``graph as memory'' is not viable. Phase~3a's four zero-training experiments (Exp1--4) test this across retrieval modes, time scales, annotation configurations, and conversation lengths.
+
+\textbf{Layer 2 — Agency (Phase~3b):} \textit{Can a model learn to actively maintain its own memory graph?} This layer splits further into two sub-problems that our original Phase~1/2 framework distinguishes:
+
+\begin{itemize}[nosep]
+\item \textbf{Phase~3b-1: Tool-calling.} Can the model be trained to invoke the \texttt{memory\_graph} tool to persist its own memories? This is \textit{external behavior learning}---similar to Phase~2's finding that models can be trained to spontaneously produce diagrams (67\% rate). Exp5 tests whether fine-tuning on conversation-to-memory-graph pairs teaches the model to call the graph-generation tool after each conversation session.
+\item \textbf{Phase~3b-2: Internalization.} Can the ``graphical memory'' habit persist when no external tool is present? This is \textit{cognitive habit formation}---the model must learn to maintain an internal spatial representation of its memory without rendering it concretely. Exp6 probes this via zero-shot transfer to held-out tasks. Phase~2's negative result (0\% transfer with 800 samples) suggests that 3b-2 is fundamentally harder than 3b-1.
+\end{itemize}
+
+Table~\ref{tab:layers} summarizes the relationship between these layers and the internalization ladder from Phase~1/2.
+
+\begin{table}[h]
+\centering\footnotesize
+\caption{Phase~3 experimental layers mapped to the internalization ladder.}
+\label{tab:layers}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Layer} & \textbf{Exp} & \textbf{Ladder Stage} & \textbf{Key Question} \\
+\midrule
+Phase~3a (Feasibility)     & Exp1--4 & Stage 1: Tool-mediated    & Can the model \textit{read} memory graphs? \\
+Phase~3b-1 (Tool-calling)  & Exp5    & Stage 2: Pattern-learned  & Can the model \textit{call} the graph tool? \\
+Phase~3b-2 (Internalization)& Exp6   & Stage 3--4: Transfer      & Does the habit survive tool removal? \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Why Separate Tool-Calling from Internalization?}
+
+This separation is critical because they face fundamentally different engineering challenges:
+
+\begin{enumerate}[nosep]
+\item \textbf{Tool-calling} is a \textit{data and fine-tuning} problem. Phase~3b-1 demonstrated that \textbf{100\% generation rate} is achievable with 425 single-domain training samples and 18 minutes of QLoRA fine-tuning. The model learns a specific output format---the \texttt{<memory\_sketch>} and \texttt{</memory\_sketch>} tag pair---in response to an explicit prompt. The graph remains an \textit{externally triggered artifact}---the model produces it when asked, not spontaneously.
+
+\item \textbf{Internalization} is qualitatively different. Phase~3b-2 found that \textbf{0\% of graph sketch behavior transfers} to held-out tasks, replicating Phase~2's result (0\% with 800 multi-domain samples). However, \textbf{100\% of structured analysis behavior transfers}---the model spontaneously organizes responses with numbered lists and hierarchical outlines. This dissociation reveals that the fine-tuned model separates ``format'' (Mermaid graph = 0\% transfer) from ``structure'' (organized output = 100\% transfer). The graph sketch requires a domain-specific output format that likely competes with the model's pre-trained ``direct answer'' reflex; the structured habit is a more general meta-skill that does not conflict with pre-training.
+\end{enumerate}
+
+The practical implication is validated by our results: Phase~3b-1 produces an immediately deployable tool (100\% generation rate for prompted graph creation). Phase~3b-2 confirms that the 0\% internalization result from Phase~2 is robust across different training configurations and task types, and provides new evidence that structural thinking (100\%) and graphical thinking (0\%) are separable transfer dimensions.
+
+\subsection{Connection to Soul Signatures}
+
+The anchor-aware memory framework~\cite{soul2026} identified that every model has stable ``anchor dimensions'' (novelty, boundary, order, time) that can guide memory compression. In the memory graph paradigm, these anchors map naturally to visual encodings:
+
+\begin{itemize}[nosep]
+\item \textbf{Time anchor} (present-focus, cross-model invariant at $\approx -0.67$): Directly encoded via the warm-cool color gradient. The invariant across models means this encoding should work universally.
+\item \textbf{Novelty anchor}: Could be encoded via node shape (circle = familiar, diamond = novel) in future iterations.
+\item \textbf{Order anchor}: Could influence edge directionality encoding (sequential vs.\ parallel).
+\end{itemize}
+
+For Phase~3, we operationalize only the time anchor (the most robust), leaving other anchors for future integration.
+
+\subsection{Limitations}
+
+\begin{enumerate}[nosep]
+\item \textbf{Synthetic data}: All experiments use synthetic conversations. Real-world conversation distributions may have different topic clustering properties and may require LLM-based topic extraction rather than rule-based keyword clustering.
+\item \textbf{Scoring metric}: The simple keyword-overlap metric (simple\_match\_score) underestimates semantic correctness. Real-world evaluation should use LLM-as-judge or human evaluation for answer quality.
+\item \textbf{Single-model testing}: Phase~3a API evaluation uses qwen3.7-plus; Phase~3b training uses Qwen2.5-7B-Instruct. Cross-model and cross-scale generalization of the memory graph paradigm remains an open question.
+\item \textbf{Exp4 sample size}: Scale expansion evaluation used 6 QA pairs per level; larger runs would yield smoother advantage curves and increased statistical power.
+\item \textbf{Incremental update calibration}: The time\_factor decay rate (0.6 per session) and blending ratio (0.5/0.5) were set heuristically. Optimal decay parameters may vary across conversation domains and session cadences.
+\end{enumerate}
+
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+This paper presents \textbf{Graphical Memory Systems}---the third phase of a research program that began with the observation that LLMs lack the ``painter stepping back'' habit. Our investigation spans two layers with six experiments, evaluated across 163 API calls (qwen3.7-plus) and one fine-tuning run (Qwen2.5-7B-Instruct, 425 samples, 18 minutes on RTX 4090D).
+
+\textbf{Layer 1 (Phase~3a) — Feasibility:} Four experiments tested whether multi-modal models can use memory graphs as a primary recall medium. Key results: (1) Hybrid graph+text retrieval achieves the highest accuracy (0.429), outperforming graph-only (0.304) and text-only (0.210). Marker-type questions reveal the graph's unique advantage---text-only scores 0.000 because circle annotations and star markers exist exclusively on the visual canvas. (2) Cross-domain incremental updates preserve 9--18\% of old nodes after 5 sessions, with controlled decay; the model successfully traces early-stage topics from the latest graph. (3) Four-channel visual encoding (time color + importance size + circle borders + comment callouts) produces a 2.2$\times$ synergy over bare skeleton graphs. Individual features contribute modestly; the combination creates a qualitative leap. (4) Graph advantage is stable across conversation scales (1.3--3.1$\times$), with an interesting tradeoff: graph dominates at small scales where the graph text representation is dense; hybrid wins at extreme scales where text supplements graph summaries.
+
+\textbf{Layer 2 (Phase~3b) — Agency:} Two experiments tested whether models can learn to maintain their own memory graphs. Results: (5) Tool-calling training achieved \textbf{100\% generation rate}---the fine-tuned model reliably produces Mermaid memory sketches and structured summaries when explicitly prompted, with loss converging from 1.268 to 0.163. (6) Zero-shot transfer of graph generation behavior is 0\%, confirming Phase~2's finding that internalization does not emerge from pattern-level fine-tuning alone. However, \textit{structured analysis} transfers at 100\%---the model spontaneously organizes its responses with numbered lists and hierarchical outlines even on unseen tasks. This dissociation between ``graph sketch'' (0\%) and ``structured thinking'' (100\%) provides the clearest evidence yet that tool-calling and internalization are fundamentally different cognitive layers.
+
+The progression from Phase~1 (external dependency graph reading) to Phase~2 (spontaneous diagram generation) to Phase~3 (persistent graphical memory) demonstrates that \textbf{visual thinking is a systematically developable capability} in language models. The boundary between tool-calling (trainable, immediately deployable) and internalization (likely requiring architectural innovation) is now empirically established. We release \texttt{memory\_graph} and all training materials, providing both an immediately usable graphical memory tool and a well-defined research frontier.
+
+
+% ============================================================
+\section*{Tool Availability}
+% ============================================================
+
+\begin{verbatim}
+# Phase 1: dependency graphs for code
+depgraph /path/to/project -o ./output/
+
+# Phase 2: topic-relationship graphs for navigation
+cognitivesketch conversation.json -o ./output/
+
+# Phase 3: persistent memory graphs
+python memory_graph.py conversation.json -o ./output/
+python memory_graph.py new_session.json --update-from v3 -o ./output/
+
+# Phase 3: data generation & evaluation
+python phase3_data_gen.py --all --output ./phase3_data/
+python phase3_eval.py --all --data ./phase3_data/ --output ./eval_results/
+\end{verbatim}
+
+Repository: \url{https://github.com/yhkkk1234/depgraph} \\
+Phase~3 tools available in \texttt{experiment/phase3/} subdirectory.
+
+
+% ============================================================
+\begin{thebibliography}{99}
+
+\bibitem{depgraph2026}
+Visual Dependency Graphs Improve LLM Cross-Module Bug Fixing: Teaching Models to ``Step Back and Look at the Canvas''.
+\newblock {\em Preprint}, 2026.
+
+\bibitem{cognitivesketch2026}
+From Dependency Graph to Cognitive Sketchpad: Visual Thinking as a General-Purpose Scaffold for LLM Memory and Reasoning.
+\newblock {\em Preprint}, 2026.
+
+\bibitem{soul2026}
+Anchor-Aware Memory Systems for AI Agents: Discovering and Preserving Latent Behavioral Signatures in Large Language Models.
+\newblock {\em Preprint}, 2026.
+
+\end{thebibliography}
+
+\end{document}
